@@ -114,6 +114,26 @@ const SEED_SOURCES = [
       serviceName: 'microservice-platform'
     },
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
+  },
+  {
+    id: uuidv4(),
+    name: 'Application Metrics (OTLP)',
+    enabled: false,
+    dataType: 'metrics',
+    subType: 'application',
+    httpEnabled: true,
+    fileEnabled: false,
+    endpointUrls: [{ url: 'https://endpoint.collection.sumologic.com/receiver/v1/http/YOUR_TOKEN_HERE', label: 'Primary', enabled: true }],
+    filePath: '',
+    intervalSeconds: 20,
+    volumePerInterval: 30,
+    format: 'otlp',
+    metadata: {
+      sourceCategory: 'prod/metrics/application',
+      sourceHost: 'app-cluster.prod.example.com',
+      serviceName: 'application-metrics'
+    },
+    stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   }
 ];
 

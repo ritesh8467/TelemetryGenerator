@@ -38,7 +38,8 @@ const FORMATS = {
   metrics: [
     { value: 'carbon2', label: 'Carbon 2.0' },
     { value: 'prometheus', label: 'Prometheus' },
-    { value: 'graphite', label: 'Graphite' }
+    { value: 'graphite', label: 'Graphite' },
+    { value: 'otlp', label: 'OTLP JSON' }
   ],
   traces: [
     { value: 'otlp', label: 'OTLP JSON' }

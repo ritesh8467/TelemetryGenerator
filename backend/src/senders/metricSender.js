@@ -26,6 +26,11 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
       }).join('\n');
       break;
 
+    case 'otlp':
+      body = JSON.stringify(formatOTLPMetrics(metrics, metadata));
+      contentType = 'application/json';
+      break;
+
     default:
       body = metrics.map(m => {
         const tags = Object.entries(m.tags).map(([k, v]) => `${k}=${v}`).join(' ');
@@ -42,8 +47,13 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
   if (metadata.sourceHost) headers['X-Sumo-Host'] = metadata.sourceHost;
   if (metadata.sourceName) headers['X-Sumo-Name'] = metadata.sourceName;
 
+  let url = endpointUrl;
+  if (format === 'otlp' && !url.endsWith('/v1/metrics') && !url.includes('receiver/v1/http')) {
+    url = url.replace(/\/$/, '') + '/v1/metrics';
+  }
+
   try {
-    const response = await fetch(endpointUrl, {
+    const response = await fetch(url, {
       method: 'POST',
       headers,
       body
@@ -57,4 +67,47 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
   } catch (err) {
     return { ok: false, status: 0, body: err.message };
   }
+}
+
+function formatOTLPMetrics(metrics, metadata) {
+  const resourceMetrics = [{
+    resource: {
+      attributes: [
+        { key: 'service.name', value: { stringValue: metadata.serviceName || 'metrics-service' } },
+        { key: 'service.instance.id', value: { stringValue: metadata.sourceHost || 'unknown' } }
+      ]
+    },
+    scopeMetrics: [{
+      scope: {
+        name: 'telemetry-generator',
+        version: '1.0.0'
+      },
+      metrics: metrics.map(m => ({
+        name: m.name,
+        type: m.type || 'gauge',
+        gauge: m.type === 'gauge' || !m.type ? {
+          dataPoints: [{
+            attributes: Object.entries(m.tags).map(([k, v]) => ({
+              key: k,
+              value: { stringValue: String(v) }
+            })),
+            timeUnixNano: String(BigInt(m.timestamp) * 1000000n),
+            asDouble: m.value
+          }]
+        } : undefined,
+        sum: m.type === 'sum' ? {
+          dataPoints: [{
+            attributes: Object.entries(m.tags).map(([k, v]) => ({
+              key: k,
+              value: { stringValue: String(v) }
+            })),
+            timeUnixNano: String(BigInt(m.timestamp) * 1000000n),
+            asDouble: m.value
+          }]
+        } : undefined
+      }))
+    }]
+  }];
+
+  return { resourceMetrics };
 }
