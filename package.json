@@ -1,0 +1,10 @@
+{
+  "name": "telemetry-generator",
+  "version": "1.0.0",
+  "description": "Synthetic telemetry data generator for Sumo Logic HTTP Sources",
+  "private": true,
+  "scripts": {
+    "dev": "cd backend && node --watch src/server.js",
+    "start": "cd backend && node src/server.js"
+  }
+}

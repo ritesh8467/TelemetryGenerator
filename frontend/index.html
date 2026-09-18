@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telemetry Generator</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-title">
+      <svg class="app-icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+        <rect width="32" height="32" rx="6" fill="#1a2332"/>
+        <polyline points="4,9 8,9 10,4 12,9 16,9 18,5 20,9 24,9 26,4 28,9" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="4,16 7,16 7,13 11,13 11,16 15,16 15,14 19,14 19,16 23,16 23,12 27,12 27,16 28,16" fill="none" stroke="#d29922" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="4,23 8,21 12,25 16,20 20,26 24,21 28,23" fill="none" stroke="#a371f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h1>Telemetry Generator</h1>
+    </div>
+    <p class="subtitle">Sumo Logic HTTP Source Data Generator</p>
+    <div id="aggregate-stats"></div>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button id="btn-add-source" class="btn btn-primary">+ Add Source</button>
+        <button id="btn-test-send" class="btn btn-secondary">Test Send</button>
+        <button id="btn-start-all" class="btn btn-success">Start All</button>
+        <button id="btn-stop-all" class="btn btn-danger">Stop All</button>
+      </div>
+      <div class="filter-group">
+        <button class="btn-filter active" data-filter="all">All</button>
+        <button class="btn-filter" data-filter="logs">Logs</button>
+        <button class="btn-filter" data-filter="metrics">Metrics</button>
+        <button class="btn-filter" data-filter="traces">Traces</button>
+      </div>
+    </div>
+    <div id="sources-grid" class="sources-grid"></div>
+  </main>
+
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <button class="modal-close">&times;</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
