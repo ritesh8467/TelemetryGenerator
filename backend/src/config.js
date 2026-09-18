@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
@@ -160,5 +160,30 @@ export function flushNow() {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
+  // Create backup before writing
+  if (existsSync(CONFIG_PATH)) {
+    const backupPath = CONFIG_PATH + '.backup';
+    try {
+      copyFileSync(CONFIG_PATH, backupPath);
+    } catch (err) {
+      console.warn('Failed to create config backup:', err.message);
+    }
+  }
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+export function restoreFromBackup() {
+  const backupPath = CONFIG_PATH + '.backup';
+  if (existsSync(backupPath)) {
+    try {
+      const raw = readFileSync(backupPath, 'utf-8');
+      config = JSON.parse(raw);
+      console.log('Config restored from backup');
+      return true;
+    } catch (err) {
+      console.error('Failed to restore from backup:', err.message);
+      return false;
+    }
+  }
+  return false;
 }
