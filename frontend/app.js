@@ -24,7 +24,8 @@ const SUB_TYPES = {
     { value: 'httpRequest', label: 'HTTP Request Traces' },
     { value: 'database', label: 'Database Traces' },
     { value: 'microservice', label: 'Microservice Chain' },
-    { value: 'error', label: 'Error Traces' }
+    { value: 'error', label: 'Error Traces' },
+    { value: 'genai', label: 'GenAI / LLM Traces' }
   ]
 };
 

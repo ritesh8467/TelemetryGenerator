@@ -16,6 +16,7 @@ import * as httpRequestTraces from './traces/httpRequest.js';
 import * as databaseTraces from './traces/database.js';
 import * as microserviceTraces from './traces/microservice.js';
 import * as errorTraces from './traces/error.js';
+import * as genaiTraces from './traces/genai.js';
 
 const generators = {
   logs: {
@@ -40,7 +41,8 @@ const generators = {
     httpRequest: httpRequestTraces,
     database: databaseTraces,
     microservice: microserviceTraces,
-    error: errorTraces
+    error: errorTraces,
+    genai: genaiTraces
   }
 };
 
