@@ -94,6 +94,26 @@ const SEED_SOURCES = [
       sourceHost: 'pii-processor.prod.example.com'
     },
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
+  },
+  {
+    id: uuidv4(),
+    name: 'Microservice Application Logs',
+    enabled: false,
+    dataType: 'logs',
+    subType: 'microservice',
+    httpEnabled: true,
+    fileEnabled: false,
+    endpointUrls: [{ url: 'https://endpoint.collection.sumologic.com/receiver/v1/http/YOUR_TOKEN_HERE', label: 'Primary', enabled: true }],
+    filePath: '',
+    intervalSeconds: 5,
+    volumePerInterval: 100,
+    format: 'json',
+    metadata: {
+      sourceCategory: 'prod/logs/microservices',
+      sourceHost: 'k8s-cluster-01.prod.example.com',
+      serviceName: 'microservice-platform'
+    },
+    stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   }
 ];
 
