@@ -75,6 +75,25 @@ const SEED_SOURCES = [
       serviceName: 'genai-service'
     },
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
+  },
+  {
+    id: uuidv4(),
+    name: 'PII Data Logs',
+    enabled: false,
+    dataType: 'logs',
+    subType: 'pii',
+    httpEnabled: true,
+    fileEnabled: false,
+    endpointUrls: [{ url: 'https://endpoint.collection.sumologic.com/receiver/v1/http/YOUR_TOKEN_HERE', label: 'Primary', enabled: true }],
+    filePath: '',
+    intervalSeconds: 15,
+    volumePerInterval: 50,
+    format: 'text',
+    metadata: {
+      sourceCategory: 'prod/logs/pii',
+      sourceHost: 'pii-processor.prod.example.com'
+    },
+    stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   }
 ];
 
