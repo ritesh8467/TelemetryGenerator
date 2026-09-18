@@ -163,6 +163,7 @@ function render() {
             <button class="kebab-menu-btn" onclick="toggleKebabMenu('${source.id}', event)" title="Options">⋯</button>
             <div class="kebab-menu" id="kebab-menu-${source.id}">
               <button class="kebab-item" onclick="showSourceDetail('${source.id}'); event.stopPropagation();">View Details</button>
+              <button class="kebab-item" onclick="showErrorLogs('${source.id}'); event.stopPropagation();">View Errors</button>
               <button class="kebab-item" onclick="duplicateSource('${source.id}'); event.stopPropagation();">Duplicate</button>
               <button class="kebab-item kebab-delete" onclick="deleteSourceQuick('${source.id}', event)">Delete</button>
             </div>
@@ -203,6 +204,46 @@ function render() {
   }).join('');
 }
 
+
+async function showErrorLogs(id) {
+  const source = state.sources.find(s => s.id === id);
+  if (!source) return;
+
+  document.getElementById('modal-content').innerHTML = `
+    <h2>${escHtml(source.name)} - Error Logs</h2>
+    <div id="error-logs" class="error-logs"><span style="color:var(--text-muted)">Loading...</span></div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    </div>
+  `;
+  openModal();
+
+  try {
+    const res = await fetch(`${API}/sources/${id}/errors`);
+    const data = await res.json();
+    const container = document.getElementById('error-logs');
+    if (!container) return;
+
+    if (!data.errors || data.errors.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-muted)">No errors recorded</span>';
+      return;
+    }
+
+    container.innerHTML = data.errors.map(entry => `
+      <div class="error-log-entry">
+        <div class="error-log-header">
+          <span class="error-log-time">${new Date(entry.timestamp).toLocaleTimeString()}</span>
+          <span class="error-log-type" style="background: ${entry.type === 'HTTP' ? 'rgba(88,166,255,0.2)' : 'rgba(210,153,34,0.2)'}; color: ${entry.type === 'HTTP' ? 'var(--logs)' : 'var(--metrics)'};">${entry.type}</span>
+        </div>
+        <div class="error-log-endpoint">${escHtml(entry.endpoint)}</div>
+        <pre class="error-log-message">${escHtml(entry.error)}</pre>
+      </div>
+    `).join('');
+  } catch (err) {
+    const container = document.getElementById('error-logs');
+    if (container) container.innerHTML = '<span style="color:var(--danger)">Failed to load error logs.</span>';
+  }
+}
 
 async function showSourceDetail(id) {
   const source = state.sources.find(s => s.id === id);

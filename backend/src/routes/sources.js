@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import * as config from '../config.js';
 import { start, stop, startAll, stopAll, isActive } from '../sourceManager.js';
-import { getRecentLogs, getHealthStatus } from '../workers/sourceWorker.js';
+import { getRecentLogs, getErrorLogs, getHealthStatus } from '../workers/sourceWorker.js';
 
 export const sourceRouter = Router();
 
@@ -136,6 +136,12 @@ sourceRouter.get('/:id/recent', (req, res) => {
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
   res.json({ recent: getRecentLogs(source.id) });
+});
+
+sourceRouter.get('/:id/errors', (req, res) => {
+  const source = config.getOne(req.params.id);
+  if (!source) return res.status(404).json({ error: 'Source not found' });
+  res.json({ errors: getErrorLogs(source.id) });
 });
 
 sourceRouter.post('/:id/duplicate', (req, res) => {

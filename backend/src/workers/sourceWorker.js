@@ -3,7 +3,9 @@ import { getGenerator } from '../generators/index.js';
 import { getSender, getFileSender } from '../senders/index.js';
 
 const MAX_RECENT = 20;
+const MAX_ERRORS = 50;
 const recentLogs = new Map();
+const errorLogs = new Map();
 const healthStatus = new Map();
 
 export function getRecentLogs(sourceId) {
@@ -12,6 +14,14 @@ export function getRecentLogs(sourceId) {
 
 export function clearRecentLogs(sourceId) {
   recentLogs.delete(sourceId);
+}
+
+export function getErrorLogs(sourceId) {
+  return errorLogs.get(sourceId) || [];
+}
+
+export function clearErrorLogs(sourceId) {
+  errorLogs.delete(sourceId);
 }
 
 export function getHealthStatus(sourceId) {
@@ -86,6 +96,16 @@ export function createWorker(source) {
             failCount++;
             allEpHealth.push({ url: filePath, label: 'File', status: 'red', error: result.body, lastCheck: now });
             console.error(`[${source.name}] File write to ${filePath} failed: ${result.body}`);
+
+            // Log error
+            let errors = errorLogs.get(source.id) || [];
+            errors.push({
+              timestamp: now,
+              endpoint: filePath,
+              type: 'FILE',
+              error: result.body
+            });
+            errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
           }
         }
 
@@ -109,6 +129,16 @@ export function createWorker(source) {
                   : `HTTP ${result.value.status}: ${result.value.body}`;
                 allEpHealth.push({ url: ep.url, label: ep.label, status: 'red', error: errMsg, lastCheck: now });
                 console.error(`[${source.name}] Send to ${ep.label || ep.url} failed: ${errMsg}`);
+
+                // Log error
+                let errors = errorLogs.get(source.id) || [];
+                errors.push({
+                  timestamp: now,
+                  endpoint: ep.label || ep.url,
+                  type: 'HTTP',
+                  error: errMsg
+                });
+                errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
               }
             }
           }

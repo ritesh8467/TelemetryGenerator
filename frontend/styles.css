@@ -792,6 +792,69 @@ header h1 { font-size: 28px; font-weight: 600; }
   background-color: rgba(248, 81, 73, 0.1);
 }
 
+.error-logs {
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.error-log-entry {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+  margin-bottom: 8px;
+}
+
+.error-log-entry:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.error-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.error-log-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.error-log-type {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.error-log-endpoint {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 4px;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.error-log-message {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--danger);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 4px 0 0;
+  padding: 8px;
+  background: rgba(248, 81, 73, 0.05);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
 .hidden {
   display: none;
 }
