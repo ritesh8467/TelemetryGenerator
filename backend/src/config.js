@@ -55,6 +55,26 @@ const SEED_SOURCES = [
       serviceName: 'api-gateway'
     },
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
+  },
+  {
+    id: uuidv4(),
+    name: 'GenAI / LLM Traces',
+    enabled: false,
+    dataType: 'traces',
+    subType: 'genai',
+    httpEnabled: true,
+    fileEnabled: false,
+    endpointUrls: [{ url: 'https://endpoint.collection.sumologic.com/receiver/v1/http/YOUR_TOKEN_HERE', label: 'Primary', enabled: true }],
+    filePath: '',
+    intervalSeconds: 10,
+    volumePerInterval: 3,
+    format: 'otlp',
+    metadata: {
+      sourceCategory: 'prod/traces/genai',
+      sourceHost: 'genai-service.prod.example.com',
+      serviceName: 'genai-service'
+    },
+    stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   }
 ];
 
