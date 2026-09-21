@@ -4,7 +4,13 @@ export async function send(records, endpointUrl, format, metadata = {}) {
 
   switch (format) {
     case 'json':
-      body = records.join('\n');
+      body = JSON.stringify(records.map(r => ({
+        timestamp: new Date().toISOString(),
+        message: r,
+        sourceCategory: metadata.sourceCategory || '',
+        sourceHost: metadata.sourceHost || '',
+        source: 'telemetry-generator'
+      })));
       contentType = 'application/json';
       break;
     case 'syslog':
