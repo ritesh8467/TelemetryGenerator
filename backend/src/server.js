@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import * as config from './config.js';
 import { sourceRouter } from './routes/sources.js';
 import { statsRouter } from './routes/stats.js';
+import { configRouter } from './routes/config.js';
 import { startAll } from './sourceManager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,6 +18,7 @@ app.use(express.static(join(__dirname, '..', '..', 'frontend')));
 
 app.use('/api/sources', sourceRouter);
 app.use('/api/stats', statsRouter);
+app.use('/api/config', configRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });

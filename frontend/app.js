@@ -1,5 +1,5 @@
 const API = '/api';
-let state = { sources: [], filter: 'all' };
+let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null };
 
 const SUB_TYPES = {
   logs: [
@@ -57,6 +57,19 @@ async function fetchStats() {
   const res = await fetch(`${API}/stats`);
   const data = await res.json();
   renderAggregateStats(data);
+}
+
+async function fetchConfigStatus() {
+  try {
+    const res = await fetch(`${API}/config/status`);
+    const data = await res.json();
+    state.hasDraft = data.hasDraft;
+    state.draftChanges = data.draftChanges;
+    state.draftSavedAt = data.draftSavedAt;
+    renderStatusBar();
+  } catch (err) {
+    console.error('Failed to fetch config status:', err);
+  }
 }
 
 async function toggleSource(id, e) {
@@ -118,6 +131,144 @@ function renderAggregateStats(data) {
     <div class="stat"><span class="stat-value">${formatNumber(data.totalMessagesSent)}</span> messages sent</div>
     <div class="stat"><span class="stat-value">${data.totalErrors}</span> errors</div>
   `;
+}
+
+function renderStatusBar() {
+  const bar = document.getElementById('config-status-bar');
+  if (!state.hasDraft) {
+    bar.className = 'config-status-bar published';
+    bar.innerHTML = `<span class="status-icon">✓</span> <span class="status-text">Published</span>`;
+  } else {
+    const timeAgoStr = state.draftSavedAt ? timeAgo(state.draftSavedAt) : 'just now';
+    bar.className = 'config-status-bar draft';
+    bar.innerHTML = `
+      <span class="status-icon">⚠</span>
+      <span class="status-text">Draft pending · ${state.draftChanges} change${state.draftChanges !== 1 ? 's' : ''} · saved ${timeAgoStr}</span>
+      <div class="status-actions">
+        <button class="btn btn-sm btn-primary" onclick="publishDraft()">Publish</button>
+        <button class="btn btn-sm btn-secondary" onclick="discardDraft()">Discard</button>
+      </div>
+    `;
+  }
+}
+
+async function publishDraft() {
+  try {
+    const res = await fetch(`${API}/config/publish`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      await fetchSources();
+      await fetchConfigStatus();
+    } else {
+      alert('Failed to publish: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Failed to publish: ' + err.message);
+  }
+}
+
+async function discardDraft() {
+  if (!confirm('Discard all pending changes?')) return;
+  try {
+    await fetch(`${API}/config/draft`, { method: 'DELETE' });
+    await fetchSources();
+    await fetchConfigStatus();
+  } catch (err) {
+    alert('Failed to discard draft: ' + err.message);
+  }
+}
+
+async function showVersionHistory() {
+  document.getElementById('modal-content').innerHTML = `
+    <h2>Version History</h2>
+    <div id="versions-list" class="version-table"><span style="color:var(--text-muted)">Loading...</span></div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    </div>
+  `;
+  openModal();
+
+  try {
+    const res = await fetch(`${API}/config/versions`);
+    const data = await res.json();
+    const container = document.getElementById('versions-list');
+    if (!container) return;
+
+    if (!data.versions || data.versions.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-muted)">No published versions yet</span>';
+      return;
+    }
+
+    container.innerHTML = `<table class="versions-table" style="width:100%; border-collapse: collapse;">
+      <tr style="border-bottom: 1px solid var(--border); font-weight: 500;">
+        <td style="padding: 8px;">Version</td>
+        <td style="padding: 8px;">Published</td>
+        <td style="padding: 8px;">Sources</td>
+        <td style="padding: 8px; text-align: right;">Actions</td>
+      </tr>
+      ${data.versions.map(v => `
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding: 8px;">v${v.version}</td>
+          <td style="padding: 8px; font-size: 12px; color: var(--text-muted);">${new Date(v.publishedAt).toLocaleString()}</td>
+          <td style="padding: 8px;">${v.sourceCount}</td>
+          <td style="padding: 8px; text-align: right;">
+            <button class="btn btn-sm btn-secondary" onclick="previewVersion(${v.version})">Preview</button>
+            <button class="btn btn-sm btn-primary" onclick="restoreVersion(${v.version})">Restore</button>
+          </td>
+        </tr>
+      `).join('')}
+    </table>`;
+  } catch (err) {
+    const container = document.getElementById('versions-list');
+    if (container) container.innerHTML = '<span style="color:var(--danger)">Failed to load versions.</span>';
+  }
+}
+
+async function previewVersion(version) {
+  try {
+    const res = await fetch(`${API}/config/versions/${version}`);
+    const data = await res.json();
+
+    let html = `<div style="margin-top: 16px;"><h4>Version ${data.version} - ${new Date(data.publishedAt).toLocaleString()}</h4>`;
+    html += `<div style="max-height: 300px; overflow-y: auto;">`;
+    if (data.sources && data.sources.length > 0) {
+      html += `<ul style="margin: 0; padding-left: 16px;">`;
+      data.sources.forEach(s => {
+        html += `<li>${escHtml(s.name)} <span style="color: var(--text-muted); font-size: 11px;">(${s.dataType})</span></li>`;
+      });
+      html += `</ul>`;
+    } else {
+      html += `<span style="color: var(--text-muted);">No sources</span>`;
+    }
+    html += `</div></div>`;
+
+    const existing = document.getElementById('version-preview');
+    if (existing) existing.remove();
+
+    const preview = document.createElement('div');
+    preview.id = 'version-preview';
+    preview.innerHTML = html;
+    document.getElementById('modal-content').appendChild(preview);
+  } catch (err) {
+    alert('Failed to preview version: ' + err.message);
+  }
+}
+
+async function restoreVersion(version) {
+  if (!confirm(`Restore to version ${version}?`)) return;
+  try {
+    const res = await fetch(`${API}/config/versions/${version}/restore`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      closeModal();
+      await fetchSources();
+      await fetchConfigStatus();
+    } else {
+      alert('Failed to restore: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Failed to restore: ' + err.message);
+  }
 }
 
 function render() {
@@ -436,7 +587,7 @@ function renderForm(source) {
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary">${isEdit ? 'Save' : 'Create'}</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? 'Save to Draft' : 'Add to Draft'}</button>
       </div>
     </form>
   `;
@@ -665,6 +816,7 @@ document.addEventListener('click', (e) => {
 
 document.getElementById('btn-add-source').addEventListener('click', showAddForm);
 document.getElementById('btn-test-send').addEventListener('click', showTestSend);
+document.getElementById('btn-versions').addEventListener('click', showVersionHistory);
 document.getElementById('btn-start-all').addEventListener('click', async () => {
   const res = await fetch(`${API}/sources/start-all`, { method: 'POST' });
   const data = await res.json();
@@ -702,5 +854,7 @@ document.querySelectorAll('.btn-filter').forEach(btn => {
 // Initial load + polling
 fetchSources();
 fetchStats();
+fetchConfigStatus();
 setInterval(fetchSources, 5000);
 setInterval(fetchStats, 5000);
+setInterval(fetchConfigStatus, 5000);

@@ -21,11 +21,20 @@ function normalizeEndpoints(body) {
 }
 
 sourceRouter.get('/', (req, res) => {
-  const sources = config.getAll().map(s => ({
-    ...s,
-    active: isActive(s.id),
-    health: isActive(s.id) ? (getHealthStatus(s.id) || { status: 'pending' }) : null
-  }));
+  const draft = config.getDraft();
+  const published = config.getAll();
+  const sources = (draft ? draft.sources : published).map(s => {
+    const active = isActive(s.id);
+    let health = null;
+    if (active) {
+      health = getHealthStatus(s.id) || { status: 'pending' };
+    }
+    const published_s = published.find(ps => ps.id === s.id);
+    if (published_s && published_s.stats) {
+      s = { ...s, stats: published_s.stats };
+    }
+    return { ...s, active, health };
+  });
   res.json({ sources });
 });
 
@@ -91,14 +100,29 @@ sourceRouter.post('/', (req, res) => {
     metadata: req.body.metadata || {},
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   };
-  config.upsert(source);
-  if (source.enabled) start(source.id);
+  let draft = config.getDraft();
+  if (!draft) {
+    draft = { sources: config.getAll().map(s => ({ ...s })) };
+  } else {
+    draft = { sources: [...draft.sources] };
+  }
+  draft.sources.push(source);
+  config.saveDraft(draft.sources);
   res.status(201).json(source);
 });
 
 sourceRouter.put('/:id', (req, res) => {
-  const existing = config.getOne(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Source not found' });
+  let draft = config.getDraft();
+  if (!draft) {
+    draft = { sources: config.getAll().map(s => ({ ...s })) };
+  } else {
+    draft = { sources: [...draft.sources] };
+  }
+
+  const idx = draft.sources.findIndex(s => s.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Source not found' });
+
+  const existing = draft.sources[idx];
 
   if (req.body.endpointUrls || req.body.endpointUrl) {
     req.body.endpointUrls = normalizeEndpoints(req.body);
@@ -111,24 +135,27 @@ sourceRouter.put('/:id', (req, res) => {
     req.body.enabled = httpEnabled || fileEnabled;
   }
 
-  const wasEnabled = existing.enabled;
-  const updated = config.upsert({ ...existing, ...req.body, id: existing.id, stats: existing.stats });
-
-  if (wasEnabled && !updated.enabled) stop(updated.id);
-  if (!wasEnabled && updated.enabled) start(updated.id);
-  if (wasEnabled && updated.enabled) {
-    stop(updated.id);
-    start(updated.id);
-  }
+  const updated = { ...existing, ...req.body, id: existing.id, stats: existing.stats };
+  draft.sources[idx] = updated;
+  config.saveDraft(draft.sources);
 
   res.json(updated);
 });
 
 sourceRouter.delete('/:id', (req, res) => {
-  const source = config.getOne(req.params.id);
-  if (!source) return res.status(404).json({ error: 'Source not found' });
-  stop(source.id);
-  config.remove(source.id);
+  let draft = config.getDraft();
+  if (!draft) {
+    draft = { sources: config.getAll().map(s => ({ ...s })) };
+  } else {
+    draft = { sources: [...draft.sources] };
+  }
+
+  const idx = draft.sources.findIndex(s => s.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Source not found' });
+
+  draft.sources.splice(idx, 1);
+  config.saveDraft(draft.sources);
+
   res.json({ deleted: true });
 });
 
@@ -145,7 +172,14 @@ sourceRouter.get('/:id/errors', (req, res) => {
 });
 
 sourceRouter.post('/:id/duplicate', (req, res) => {
-  const source = config.getOne(req.params.id);
+  let draft = config.getDraft();
+  if (!draft) {
+    draft = { sources: config.getAll().map(s => ({ ...s })) };
+  } else {
+    draft = { sources: [...draft.sources] };
+  }
+
+  const source = draft.sources.find(s => s.id === req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
   const duplicate = {
@@ -155,7 +189,9 @@ sourceRouter.post('/:id/duplicate', (req, res) => {
     enabled: false,
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   };
-  config.upsert(duplicate);
+  draft.sources.push(duplicate);
+  config.saveDraft(draft.sources);
+
   res.status(201).json(duplicate);
 });
 
@@ -247,6 +283,16 @@ sourceRouter.post('/:id/toggle-http', (req, res) => {
   source.enabled = source.httpEnabled || source.fileEnabled;
   config.upsert(source);
 
+  const draft = config.getDraft();
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === source.id);
+    if (draftSource) {
+      draftSource.httpEnabled = source.httpEnabled;
+      draftSource.enabled = source.enabled;
+      config.saveDraft(draft.sources);
+    }
+  }
+
   if (!wasEnabled && source.enabled) start(source.id);
   else if (wasEnabled && !source.enabled) stop(source.id);
   else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
@@ -262,6 +308,16 @@ sourceRouter.post('/:id/toggle-file', (req, res) => {
   source.fileEnabled = !source.fileEnabled;
   source.enabled = source.httpEnabled || source.fileEnabled;
   config.upsert(source);
+
+  const draft = config.getDraft();
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === source.id);
+    if (draftSource) {
+      draftSource.fileEnabled = source.fileEnabled;
+      draftSource.enabled = source.enabled;
+      config.saveDraft(draft.sources);
+    }
+  }
 
   if (!wasEnabled && source.enabled) start(source.id);
   else if (wasEnabled && !source.enabled) stop(source.id);

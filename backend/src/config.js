@@ -1,10 +1,13 @@
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, '..', 'data', 'config.json');
+const DRAFT_PATH = join(__dirname, '..', 'data', 'config.draft.json');
+const VERSIONS_DIR = join(__dirname, '..', 'data', 'versions');
+const VERSIONS_INDEX = join(VERSIONS_DIR, 'index.json');
 
 const SEED_SOURCES = [
   {
@@ -245,4 +248,137 @@ export function restoreFromBackup() {
     }
   }
   return false;
+}
+
+export function getDraft() {
+  if (!existsSync(DRAFT_PATH)) return null;
+  try {
+    const raw = readFileSync(DRAFT_PATH, 'utf-8');
+    const draft = JSON.parse(raw);
+    return draft;
+  } catch (err) {
+    console.error('Failed to read draft:', err.message);
+    return null;
+  }
+}
+
+export function saveDraft(sources) {
+  try {
+    mkdirSync(VERSIONS_DIR, { recursive: true });
+    if (existsSync(DRAFT_PATH)) {
+      copyFileSync(DRAFT_PATH, DRAFT_PATH + '.prev');
+    }
+    writeFileSync(DRAFT_PATH, JSON.stringify({ sources, savedAt: new Date().toISOString() }, null, 2));
+  } catch (err) {
+    console.error('Failed to save draft:', err.message);
+    throw err;
+  }
+}
+
+export function discardDraft() {
+  try {
+    if (existsSync(DRAFT_PATH)) {
+      copyFileSync(DRAFT_PATH, DRAFT_PATH + '.discarded');
+      unlinkSync(DRAFT_PATH);
+    }
+  } catch (err) {
+    console.error('Failed to discard draft:', err.message);
+  }
+}
+
+function saveToVersionHistory() {
+  try {
+    mkdirSync(VERSIONS_DIR, { recursive: true });
+
+    let versionIndex = { versions: [], nextVersion: 1 };
+    if (existsSync(VERSIONS_INDEX)) {
+      const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
+      versionIndex = JSON.parse(raw);
+    }
+
+    const version = versionIndex.nextVersion;
+    const publishedAt = new Date().toISOString();
+    const filename = `v${version}_${publishedAt.split('T')[0]}T${publishedAt.split('T')[1].replace(/:/g, '-').split('.')[0]}Z.json`;
+    const versionPath = join(VERSIONS_DIR, filename);
+
+    writeFileSync(versionPath, JSON.stringify({
+      version,
+      publishedAt,
+      sources: config.sources
+    }, null, 2));
+
+    versionIndex.versions.unshift({ version, publishedAt, filename, sourceCount: config.sources.length });
+    versionIndex.nextVersion = version + 1;
+
+    if (versionIndex.versions.length > 10) {
+      const removed = versionIndex.versions.pop();
+      try {
+        unlinkSync(join(VERSIONS_DIR, removed.filename));
+      } catch (err) {
+        console.warn('Failed to delete old version file:', err.message);
+      }
+    }
+
+    writeFileSync(VERSIONS_INDEX, JSON.stringify(versionIndex, null, 2));
+    return { version, publishedAt };
+  } catch (err) {
+    console.error('Failed to save to version history:', err.message);
+    throw err;
+  }
+}
+
+export function publish(draftSources) {
+  try {
+    config.sources = draftSources;
+    const { version, publishedAt } = saveToVersionHistory();
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    discardDraft();
+    return { success: true, version, publishedAt };
+  } catch (err) {
+    console.error('Failed to publish:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+export function getVersions() {
+  try {
+    if (!existsSync(VERSIONS_INDEX)) return [];
+    const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
+    const index = JSON.parse(raw);
+    return index.versions || [];
+  } catch (err) {
+    console.error('Failed to read versions:', err.message);
+    return [];
+  }
+}
+
+export function getVersion(versionNumber) {
+  try {
+    const versions = getVersions();
+    const vInfo = versions.find(v => v.version === versionNumber);
+    if (!vInfo) return null;
+
+    const versionPath = join(VERSIONS_DIR, vInfo.filename);
+    const raw = readFileSync(versionPath, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to read version:', err.message);
+    return null;
+  }
+}
+
+export function restoreVersion(versionNumber) {
+  try {
+    const version = getVersion(versionNumber);
+    if (!version) return { success: false, error: 'Version not found' };
+
+    saveToVersionHistory();
+    config.sources = version.sources;
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    discardDraft();
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to restore version:', err.message);
+    return { success: false, error: err.message };
+  }
 }
