@@ -275,6 +275,19 @@ sourceRouter.post('/:id/toggle', (req, res) => {
 });
 
 sourceRouter.post('/:id/toggle-http', (req, res) => {
+  const draft = config.getDraft();
+
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === req.params.id);
+    if (!draftSource) return res.status(404).json({ error: 'Source not found' });
+
+    draftSource.httpEnabled = !draftSource.httpEnabled;
+    draftSource.enabled = draftSource.httpEnabled || draftSource.fileEnabled;
+    config.saveDraft(draft.sources);
+
+    return res.json({ ...draftSource, active: isActive(draftSource.id) });
+  }
+
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
@@ -282,16 +295,6 @@ sourceRouter.post('/:id/toggle-http', (req, res) => {
   source.httpEnabled = !source.httpEnabled;
   source.enabled = source.httpEnabled || source.fileEnabled;
   config.upsert(source);
-
-  const draft = config.getDraft();
-  if (draft) {
-    const draftSource = draft.sources.find(s => s.id === source.id);
-    if (draftSource) {
-      draftSource.httpEnabled = source.httpEnabled;
-      draftSource.enabled = source.enabled;
-      config.saveDraft(draft.sources);
-    }
-  }
 
   if (!wasEnabled && source.enabled) start(source.id);
   else if (wasEnabled && !source.enabled) stop(source.id);
@@ -301,6 +304,19 @@ sourceRouter.post('/:id/toggle-http', (req, res) => {
 });
 
 sourceRouter.post('/:id/toggle-file', (req, res) => {
+  const draft = config.getDraft();
+
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === req.params.id);
+    if (!draftSource) return res.status(404).json({ error: 'Source not found' });
+
+    draftSource.fileEnabled = !draftSource.fileEnabled;
+    draftSource.enabled = draftSource.httpEnabled || draftSource.fileEnabled;
+    config.saveDraft(draft.sources);
+
+    return res.json({ ...draftSource, active: isActive(draftSource.id) });
+  }
+
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
@@ -308,16 +324,6 @@ sourceRouter.post('/:id/toggle-file', (req, res) => {
   source.fileEnabled = !source.fileEnabled;
   source.enabled = source.httpEnabled || source.fileEnabled;
   config.upsert(source);
-
-  const draft = config.getDraft();
-  if (draft) {
-    const draftSource = draft.sources.find(s => s.id === source.id);
-    if (draftSource) {
-      draftSource.fileEnabled = source.fileEnabled;
-      draftSource.enabled = source.enabled;
-      config.saveDraft(draft.sources);
-    }
-  }
 
   if (!wasEnabled && source.enabled) start(source.id);
   else if (wasEnabled && !source.enabled) stop(source.id);

@@ -137,19 +137,30 @@ function renderStatusBar() {
   const bar = document.getElementById('config-status-bar');
   if (!state.hasDraft) {
     bar.className = 'config-status-bar published';
-    bar.innerHTML = `<span class="status-icon">✓</span> <span class="status-text">Published</span>`;
   } else {
-    const timeAgoStr = state.draftSavedAt ? timeAgo(state.draftSavedAt) : 'just now';
     bar.className = 'config-status-bar draft';
-    bar.innerHTML = `
-      <span class="status-icon">⚠</span>
-      <span class="status-text">Draft pending · ${state.draftChanges} change${state.draftChanges !== 1 ? 's' : ''} · saved ${timeAgoStr}</span>
-      <div class="status-actions">
-        <button class="btn btn-sm btn-primary" onclick="publishDraft()">Publish</button>
-        <button class="btn btn-sm btn-secondary" onclick="discardDraft()">Discard</button>
-      </div>
-    `;
   }
+  renderDraftIndicator();
+}
+
+function renderDraftIndicator() {
+  const indicator = document.getElementById('draft-indicator');
+  if (!indicator) return;
+
+  if (!state.hasDraft) {
+    indicator.innerHTML = '';
+    return;
+  }
+
+  const timeAgoStr = state.draftSavedAt ? timeAgo(state.draftSavedAt) : 'just now';
+  indicator.innerHTML = `
+    <div class="draft-indicator-content">
+      <span class="draft-badge">⚠ Draft</span>
+      <span class="draft-info">${state.draftChanges} change${state.draftChanges !== 1 ? 's' : ''}</span>
+      <button class="btn btn-sm btn-primary" onclick="publishDraft()">Publish</button>
+      <button class="btn btn-sm btn-secondary" onclick="discardDraft()">Discard</button>
+    </div>
+  `;
 }
 
 async function publishDraft() {

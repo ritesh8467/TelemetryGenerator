@@ -886,37 +886,63 @@ header h1 { font-size: 28px; font-weight: 600; }
 }
 
 .config-status-bar {
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 1000;
+  transition: background 0.3s;
+  display: none;
 }
 
 .config-status-bar.published {
-  background: rgba(63, 185, 80, 0.05);
-  color: var(--success);
+  background: var(--success);
+  display: block;
 }
 
 .config-status-bar.draft {
-  background: rgba(210, 153, 34, 0.15);
-  border-bottom: 2px solid var(--warning);
-  color: var(--warning);
+  background: var(--warning);
+  display: block;
+  animation: draft-pulse 2s infinite;
 }
 
-.config-status-bar .status-icon {
-  font-weight: 600;
-  font-size: 14px;
+@keyframes draft-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
-.config-status-bar .status-text {
-  flex: 1;
+#draft-indicator {
+  margin-top: 16px;
 }
 
-.config-status-bar .status-actions {
+.draft-indicator-content {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(210, 153, 34, 0.1);
+  border: 1px solid rgba(210, 153, 34, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.draft-badge {
+  font-weight: 600;
+  color: var(--warning);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.draft-info {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.draft-indicator-content .btn {
+  padding: 4px 12px;
+  font-size: 12px;
   margin-left: auto;
 }
 
