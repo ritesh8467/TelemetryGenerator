@@ -44,6 +44,7 @@ main {
   display: flex;
   align-items: center;
   gap: 12px;
+  justify-content: space-between;
 }
 
 .app-icon {
@@ -54,6 +55,22 @@ main {
 
 header h1 { font-size: 28px; font-weight: 600; }
 .subtitle { color: var(--text-muted); margin-top: 4px; font-size: 14px; }
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: var(--text-muted);
+  transition: color 0.2s, transform 0.2s;
+  flex-shrink: 0;
+}
+
+.github-link:hover {
+  color: var(--primary);
+  transform: scale(1.1);
+}
 
 #aggregate-stats {
   display: flex;
