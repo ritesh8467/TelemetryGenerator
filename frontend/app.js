@@ -75,7 +75,7 @@ async function fetchConfigStatus() {
 async function toggleSource(id, e) {
   e.stopPropagation();
   await fetch(`${API}/sources/${id}/toggle`, { method: 'POST' });
-  await fetchSources();
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
 }
 
 async function toggleHttpSource(id, e) {
@@ -306,21 +306,22 @@ function render() {
     const healthClass = source.health?.status === 'green' ? 'health-green'
       : source.health?.status === 'red' ? 'health-red'
       : source.health?.status === 'mixed' ? 'health-mixed' : '';
-    var httpEnabled = source.httpEnabled !== false;
+    var anyEndpointEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
     var fileEnabled = !!source.fileEnabled;
     var epCount = (source.endpointUrls || []).length;
     var modeBadges = '';
     if (fileEnabled) modeBadges += ' <span class="badge badge-ep">file</span>';
     if (epCount > 1) modeBadges += ' <span class="badge badge-ep">' + epCount + ' ep</span>';
-    var healthHints = '';
-    if (source.health?.endpoints) {
-      var failedEps = source.health.endpoints.filter(function(e) { return e.status === 'red'; });
-      if (failedEps.length > 0) {
-        healthHints = '<div class="health-error-hint">' + failedEps.map(function(e) {
-          return escHtml(e.label || 'Endpoint') + ': ' + escHtml(e.error || 'failed');
-        }).join('<br>') + '</div>';
-      }
-    }
+    var healthHints = source.draftOnly
+      ? '<div class="health-draft-hint">Not published — publish to start sending</div>'
+      : '';
+    var runningStatus = source.draftOnly
+      ? '<span class="status-dot status-dot-draft"></span>Draft only'
+      : `<label class="source-run-toggle" onclick="event.stopPropagation()" title="${source.active ? 'Click to stop' : 'Click to start'}">
+           <input type="checkbox" ${source.active ? 'checked' : ''} onchange="toggleSource('${source.id}', event)">
+           <span class="source-run-slider"></span>
+           <span class="source-run-label">${source.active ? 'Running' : 'Stopped'}</span>
+         </label>`;
 
     return `
     <div class="source-card ${healthClass}" onclick="showEditForm('${source.id}')">
@@ -329,10 +330,10 @@ function render() {
         <div class="source-card-actions">
           ${modeBadges}<span class="badge badge-${source.dataType}">${source.dataType}</span>
           <div class="kebab-menu-container">
-            <button class="kebab-menu-btn" onclick="toggleKebabMenu('${source.id}', event)" title="Options">⋯</button>
+            <button class="kebab-menu-btn" onclick="toggleKebabMenu('${source.id}', event)" title="Options">⋯${(source.health?.status === 'red' || source.health?.status === 'mixed') ? '<span class="kebab-error-dot"></span>' : ''}</button>
             <div class="kebab-menu" id="kebab-menu-${source.id}">
               <button class="kebab-item" onclick="showSourceDetail('${source.id}'); event.stopPropagation();">View Details</button>
-              <button class="kebab-item" onclick="showErrorLogs('${source.id}'); event.stopPropagation();">View Errors</button>
+              <button class="kebab-item" onclick="showErrorLogs('${source.id}'); event.stopPropagation();">View Errors${(source.health?.status === 'red' || source.health?.status === 'mixed') ? ' <span class="kebab-error-badge">!</span>' : ''}</button>
               <button class="kebab-item" onclick="duplicateSource('${source.id}'); event.stopPropagation();">Duplicate</button>
               <button class="kebab-item kebab-delete" onclick="deleteSourceQuick('${source.id}', event)">Delete</button>
             </div>
@@ -343,34 +344,52 @@ function render() {
         ${escHtml(source.subType)} &middot; ${source.format} &middot; every ${source.intervalSeconds}s &middot; ${source.volumePerInterval} records
       </div>
       <div class="source-card-stats">
-        <span><span class="status-dot ${(httpEnabled || fileEnabled) ? 'active' : 'inactive'}"></span>${(httpEnabled || fileEnabled) ? 'Running' : 'Stopped'}</span>
+        <span>${runningStatus}</span>
         <span>${formatNumber(source.stats?.messagesSent || 0)} sent</span>
         <span>${source.stats?.errors || 0} errors</span>
         <span>${source.stats?.lastSentAt ? timeAgo(source.stats.lastSentAt) : 'Never sent'}</span>
       </div>${healthHints}
       <div class="source-card-footer">
         <div class="export-toggles" onclick="event.stopPropagation()">
-          ${httpEnabled && (source.endpointUrls || []).length > 0 ? `
+          ${(source.endpointUrls || []).length > 0 ? `
+          <div class="export-toggle-section-label">HTTP Endpoints</div>
           <div class="ep-toggles-grid">
             ${(source.endpointUrls || []).map((ep, i) => {
-              const epHealth = (source.health?.endpoints || []).find(h => h.label === ep.label);
-              const healthDot = epHealth ? '<span class="toggle-health" style="background:' + (epHealth.status === 'green' ? 'var(--success)' : 'var(--danger)') + '"></span>' : '';
+              const epHealth = (source.health?.endpoints || []).find(h => h.label === ep.label || h.url === ep.url);
+              const isEnabled = ep.enabled !== false;
+              let healthDot = '';
+              if (isEnabled) {
+                let cls = '';
+                const hs = source.health?.status;
+                if (epHealth) {
+                  cls = epHealth.status === 'green' ? 'green' : 'red';
+                } else if (source.active) {
+                  cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                }
+                const title = epHealth?.error ? escHtml(epHealth.error) : (cls === 'pending' ? 'Waiting for first result…' : cls === 'red' ? 'No telemetry sent successfully' : '');
+                if (cls) healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
+              }
               const label = escHtml(ep.label || 'EP' + (i + 1));
-              return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + label + '">' + label + '</span>' + healthDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + (ep.enabled ? 'checked' : '') + ' onchange="toggleEndpoint(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
+              const checked = isEnabled ? 'checked' : '';
+              const dimmed = !isEnabled ? 'style="opacity:0.45"' : '';
+              return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + escHtml(ep.url || '') + '" ' + dimmed + '>' + label + '</span>' + healthDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + checked + ' onchange="toggleEndpoint(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
             }).join('')}
           </div>
           <div class="ep-channel-divider"></div>` : ''}
+          <div class="export-toggle-section-label">Local File</div>
           <div class="channel-row">
             <div class="export-toggle-item">
-              <span class="export-toggle-label">HTTP</span>
-              <label class="toggle toggle-sm">
-                <input type="checkbox" ${httpEnabled ? 'checked' : ''} onchange="toggleHttpSource('${source.id}', event)">
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-            <div class="export-toggle-item">
-              <span class="export-toggle-label">File</span>
-              ${fileEnabled ? '<span class="toggle-health" style="background:' + ((source.health?.endpoints || []).find(e => e.label === 'File')?.status === 'green' ? 'var(--success)' : 'var(--danger)') + '"></span>' : ''}
+              <span class="export-toggle-label ep-name" ${!fileEnabled ? 'style="opacity:0.45"' : ''}>
+                ${source.filePath ? escHtml(source.filePath.split('/').pop() || source.filePath) : 'No path set'}
+              </span>
+              ${(() => {
+                const fh = (source.health?.endpoints || []).find(e => e.label === 'File');
+                const hs = source.health?.status;
+                const cls = fh ? (fh.status === 'green' ? 'green' : 'red')
+                  : fileEnabled && source.active ? ((hs === 'red' || hs === 'mixed') ? 'red' : 'pending') : '';
+                const ftitle = fh?.error ? escHtml(fh.error) : cls === 'pending' ? 'Waiting for first result…' : cls === 'red' ? 'No telemetry sent successfully' : '';
+                return cls ? '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>' : '';
+              })()}
               <label class="toggle toggle-sm">
                 <input type="checkbox" ${fileEnabled ? 'checked' : ''} onchange="toggleFileSource('${source.id}', event)">
                 <span class="toggle-slider"></span>
@@ -845,24 +864,12 @@ document.getElementById('btn-add-source').addEventListener('click', showAddForm)
 document.getElementById('btn-test-send').addEventListener('click', showTestSend);
 document.getElementById('btn-versions').addEventListener('click', showVersionHistory);
 document.getElementById('btn-start-all').addEventListener('click', async () => {
-  const res = await fetch(`${API}/sources/start-all`, { method: 'POST' });
-  const data = await res.json();
-  if (data.sources) {
-    state.sources = data.sources;
-    render();
-  } else {
-    await fetchSources();
-  }
+  await fetch(`${API}/sources/start-all`, { method: 'POST' });
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
 });
 document.getElementById('btn-stop-all').addEventListener('click', async () => {
-  const res = await fetch(`${API}/sources/stop-all`, { method: 'POST' });
-  const data = await res.json();
-  if (data.sources) {
-    state.sources = data.sources;
-    render();
-  } else {
-    await fetchSources();
-  }
+  await fetch(`${API}/sources/stop-all`, { method: 'POST' });
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
 });
 document.querySelector('.modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-overlay').addEventListener('click', (e) => {

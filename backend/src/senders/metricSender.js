@@ -56,7 +56,8 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body
+      body,
+      signal: AbortSignal.timeout(10000)
     });
 
     return {
@@ -65,7 +66,7 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
       body: response.ok ? '' : await response.text()
     };
   } catch (err) {
-    return { ok: false, status: 0, body: err.message };
+    return { ok: false, status: 0, body: err.name === 'TimeoutError' ? 'Request timed out (10s)' : err.message };
   }
 }
 

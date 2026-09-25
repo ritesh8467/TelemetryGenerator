@@ -76,7 +76,6 @@ export function createWorker(source) {
         storeRecent(source.id, records, source.dataType);
 
         const currentSource = config.getOne(source.id);
-        const httpEnabled = currentSource?.httpEnabled ?? true;
         const fileEnabled = currentSource?.fileEnabled ?? false;
         const filePath = currentSource?.filePath || source.filePath || '';
 
@@ -86,31 +85,32 @@ export function createWorker(source) {
         let failCount = 0;
 
         // File export
-        if (fileEnabled && filePath) {
-          const fileSenderModule = getFileSender();
-          const result = await fileSenderModule.send(records, filePath, source.dataType, source.format);
-          if (result.ok) {
-            successCount++;
-            allEpHealth.push({ url: filePath, label: 'File', status: 'green', error: null, lastCheck: now });
-          } else {
+        if (fileEnabled) {
+          if (!filePath) {
             failCount++;
-            allEpHealth.push({ url: filePath, label: 'File', status: 'red', error: result.body, lastCheck: now });
-            console.error(`[${source.name}] File write to ${filePath} failed: ${result.body}`);
-
-            // Log error
+            allEpHealth.push({ url: '', label: 'File', status: 'red', error: 'No file path configured', lastCheck: now });
             let errors = errorLogs.get(source.id) || [];
-            errors.push({
-              timestamp: now,
-              endpoint: filePath,
-              type: 'FILE',
-              error: result.body
-            });
+            errors.push({ timestamp: now, endpoint: '', type: 'FILE', error: 'No file path configured' });
             errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
+          } else {
+            const fileSenderModule = getFileSender();
+            const result = await fileSenderModule.send(records, filePath, source.dataType, source.format);
+            if (result.ok) {
+              successCount++;
+              allEpHealth.push({ url: filePath, label: 'File', status: 'green', error: null, lastCheck: now });
+            } else {
+              failCount++;
+              allEpHealth.push({ url: filePath, label: 'File', status: 'red', error: result.body, lastCheck: now });
+              console.error(`[${source.name}] File write to ${filePath} failed: ${result.body}`);
+              let errors = errorLogs.get(source.id) || [];
+              errors.push({ timestamp: now, endpoint: filePath, type: 'FILE', error: result.body });
+              errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
+            }
           }
         }
 
-        // HTTP export
-        if (httpEnabled) {
+        // HTTP export — gate only on individual endpoint enabled flags, not httpEnabled master
+        {
           const endpoints = (currentSource?.endpointUrls || source.endpointUrls || []).filter(ep => ep.enabled !== false);
           if (endpoints.length > 0) {
             const results = await Promise.allSettled(
@@ -144,7 +144,10 @@ export function createWorker(source) {
           }
         }
 
-        if (allEpHealth.length === 0) return;
+        if (allEpHealth.length === 0) {
+          healthStatus.delete(source.id);
+          return;
+        }
 
         const aggregate = failCount === 0 ? 'green' : successCount === 0 ? 'red' : 'mixed';
         healthStatus.set(source.id, { status: aggregate, endpoints: allEpHealth, lastCheck: now });
