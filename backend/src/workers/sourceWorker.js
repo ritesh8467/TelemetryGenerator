@@ -76,34 +76,34 @@ export function createWorker(source) {
         storeRecent(source.id, records, source.dataType);
 
         const currentSource = config.getOne(source.id);
-        const fileEnabled = currentSource?.fileEnabled ?? false;
-        const filePath = currentSource?.filePath || source.filePath || '';
 
         const now = new Date().toISOString();
         const allEpHealth = [];
         let successCount = 0;
         let failCount = 0;
 
-        // File export
-        if (fileEnabled) {
-          if (!filePath) {
+        // File export — iterate fileOutputs array
+        const fileOutputs = (currentSource?.fileOutputs || source.fileOutputs || []).filter(f => f.enabled !== false);
+        for (const fileOut of fileOutputs) {
+          const label = fileOut.label || 'File';
+          if (!fileOut.path) {
             failCount++;
-            allEpHealth.push({ url: '', label: 'File', status: 'red', error: 'No file path configured', lastCheck: now });
+            allEpHealth.push({ url: '', label, status: 'red', error: 'No file path configured', lastCheck: now });
             let errors = errorLogs.get(source.id) || [];
-            errors.push({ timestamp: now, endpoint: '', type: 'FILE', error: 'No file path configured' });
+            errors.push({ timestamp: now, endpoint: label, type: 'FILE', error: 'No file path configured' });
             errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
           } else {
             const fileSenderModule = getFileSender();
-            const result = await fileSenderModule.send(records, filePath, source.dataType, source.format);
+            const result = await fileSenderModule.send(records, fileOut.path, source.dataType, source.format);
             if (result.ok) {
               successCount++;
-              allEpHealth.push({ url: filePath, label: 'File', status: 'green', error: null, lastCheck: now });
+              allEpHealth.push({ url: fileOut.path, label, status: 'green', error: null, lastCheck: now });
             } else {
               failCount++;
-              allEpHealth.push({ url: filePath, label: 'File', status: 'red', error: result.body, lastCheck: now });
-              console.error(`[${source.name}] File write to ${filePath} failed: ${result.body}`);
+              allEpHealth.push({ url: fileOut.path, label, status: 'red', error: result.body, lastCheck: now });
+              console.error(`[${source.name}] File write to ${fileOut.path} failed: ${result.body}`);
               let errors = errorLogs.get(source.id) || [];
-              errors.push({ timestamp: now, endpoint: filePath, type: 'FILE', error: result.body });
+              errors.push({ timestamp: now, endpoint: label, type: 'FILE', error: result.body });
               errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
             }
           }
@@ -145,12 +145,25 @@ export function createWorker(source) {
         }
 
         if (allEpHealth.length === 0) {
-          healthStatus.delete(source.id);
+          // No active endpoints this tick — preserve last known health so indicators
+          // don't reset to pending without a successful send.
           return;
         }
 
+        // Merge with previous endpoint health so disabled endpoints keep their last
+        // known status (only overwrite entries that were actually attempted this tick).
+        const prevEndpoints = (healthStatus.get(source.id) || {}).endpoints || [];
+        const epMap = new Map();
+        for (const prev of prevEndpoints) {
+          epMap.set((prev.url || '') + '|||' + (prev.label || ''), prev);
+        }
+        for (const ep of allEpHealth) {
+          epMap.set((ep.url || '') + '|||' + (ep.label || ''), ep);
+        }
+        const mergedEndpoints = [...epMap.values()];
+
         const aggregate = failCount === 0 ? 'green' : successCount === 0 ? 'red' : 'mixed';
-        healthStatus.set(source.id, { status: aggregate, endpoints: allEpHealth, lastCheck: now });
+        healthStatus.set(source.id, { status: aggregate, endpoints: mergedEndpoints, lastCheck: now });
 
         if (currentSource) {
           const prevStats = currentSource.stats || {};

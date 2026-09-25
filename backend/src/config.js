@@ -166,6 +166,12 @@ export function load() {
         delete source.exportMode;
         migrated = true;
       }
+      if (!source.hasOwnProperty('fileOutputs')) {
+        source.fileOutputs = source.filePath
+          ? [{ path: source.filePath, label: 'File', enabled: !!source.fileEnabled }]
+          : [];
+        migrated = true;
+      }
     }
     if (migrated) {
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));

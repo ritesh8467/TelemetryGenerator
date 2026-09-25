@@ -90,6 +90,12 @@ async function toggleFileSource(id, e) {
   await fetchSources();
 }
 
+async function toggleFileOutput(sourceId, foIndex, e) {
+  e.stopPropagation();
+  await fetch(`${API}/sources/${sourceId}/toggle-file-output/${foIndex}`, { method: 'POST' });
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
+}
+
 async function toggleEndpoint(sourceId, epIndex, e) {
   e.stopPropagation();
   await fetch(`${API}/sources/${sourceId}/toggle-endpoint/${epIndex}`, { method: 'POST' });
@@ -121,13 +127,23 @@ function toggleKebabMenu(id, e) {
 async function saveSource(formData, id) {
   const method = id ? 'PUT' : 'POST';
   const url = id ? `${API}/sources/${id}` : `${API}/sources`;
-  await fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(formData)
-  });
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formData)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert('Failed to save: ' + (err.error || res.statusText));
+      return;
+    }
+  } catch (err) {
+    alert('Failed to save: ' + err.message);
+    return;
+  }
   closeModal();
-  await fetchSources();
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
 }
 
 function renderAggregateStats(data) {
@@ -307,10 +323,10 @@ function render() {
       : source.health?.status === 'red' ? 'health-red'
       : source.health?.status === 'mixed' ? 'health-mixed' : '';
     var anyEndpointEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-    var fileEnabled = !!source.fileEnabled;
+    var fileOutputCount = (source.fileOutputs || []).length;
     var epCount = (source.endpointUrls || []).length;
     var modeBadges = '';
-    if (fileEnabled) modeBadges += ' <span class="badge badge-ep">file</span>';
+    if (fileOutputCount > 0) modeBadges += ' <span class="badge badge-ep">file' + (fileOutputCount > 1 ? ' ×' + fileOutputCount : '') + '</span>';
     if (epCount > 1) modeBadges += ' <span class="badge badge-ep">' + epCount + ' ep</span>';
     var healthHints = source.draftOnly
       ? '<div class="health-draft-hint">Not published — publish to start sending</div>'
@@ -323,8 +339,9 @@ function render() {
            <span class="source-run-label">${source.active ? 'Running' : 'Stopped'}</span>
          </label>`;
 
+    var stoppedClass = (!source.draftOnly && !source.active) ? 'source-card-stopped' : '';
     return `
-    <div class="source-card ${healthClass}" onclick="showEditForm('${source.id}')">
+    <div class="source-card ${healthClass} ${stoppedClass}" onclick="showEditForm('${source.id}')">
       <div class="source-card-header">
         <span class="source-card-title">${escHtml(source.name)}</span>
         <div class="source-card-actions">
@@ -358,15 +375,14 @@ function render() {
               const epHealth = (source.health?.endpoints || []).find(h => h.label === ep.label || h.url === ep.url);
               const isEnabled = ep.enabled !== false;
               let healthDot = '';
-              if (isEnabled) {
-                let cls = '';
+              if (epHealth) {
+                const cls = epHealth.status === 'green' ? 'green' : 'red';
+                const title = epHealth.error ? escHtml(epHealth.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
+                healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
+              } else if (isEnabled && source.active) {
                 const hs = source.health?.status;
-                if (epHealth) {
-                  cls = epHealth.status === 'green' ? 'green' : 'red';
-                } else if (source.active) {
-                  cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
-                }
-                const title = epHealth?.error ? escHtml(epHealth.error) : (cls === 'pending' ? 'Waiting for first result…' : cls === 'red' ? 'No telemetry sent successfully' : '');
+                const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                const title = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
                 if (cls) healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
               }
               const label = escHtml(ep.label || 'EP' + (i + 1));
@@ -374,28 +390,34 @@ function render() {
               const dimmed = !isEnabled ? 'style="opacity:0.45"' : '';
               return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + escHtml(ep.url || '') + '" ' + dimmed + '>' + label + '</span>' + healthDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + checked + ' onchange="toggleEndpoint(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
             }).join('')}
-          </div>
-          <div class="ep-channel-divider"></div>` : ''}
+          </div>` : ''}
+          ${(source.fileOutputs || []).length > 0 ? `
+          ${(source.endpointUrls || []).length > 0 ? '<div class="ep-channel-divider"></div>' : ''}
           <div class="export-toggle-section-label">Local File</div>
-          <div class="channel-row">
-            <div class="export-toggle-item">
-              <span class="export-toggle-label ep-name" ${!fileEnabled ? 'style="opacity:0.45"' : ''}>
-                ${source.filePath ? escHtml(source.filePath.split('/').pop() || source.filePath) : 'No path set'}
-              </span>
-              ${(() => {
-                const fh = (source.health?.endpoints || []).find(e => e.label === 'File');
+          <div class="ep-toggles-grid">
+            ${(source.fileOutputs || []).map((fo, i) => {
+              const foEnabled = fo.enabled !== false;
+              const fh = (source.health?.endpoints || []).find(e => e.label === (fo.label || 'File') || e.url === fo.path);
+              let fhDot = '';
+              if (!fo.path) {
+                fhDot = '<span class="toggle-health red" title="No file path configured"></span>';
+              } else if (fh) {
+                const cls = fh.status === 'green' ? 'green' : 'red';
+                const ftitle = fh.error ? escHtml(fh.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
+                fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
+              } else if (foEnabled && source.active) {
                 const hs = source.health?.status;
-                const cls = fh ? (fh.status === 'green' ? 'green' : 'red')
-                  : fileEnabled && source.active ? ((hs === 'red' || hs === 'mixed') ? 'red' : 'pending') : '';
-                const ftitle = fh?.error ? escHtml(fh.error) : cls === 'pending' ? 'Waiting for first result…' : cls === 'red' ? 'No telemetry sent successfully' : '';
-                return cls ? '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>' : '';
-              })()}
-              <label class="toggle toggle-sm">
-                <input type="checkbox" ${fileEnabled ? 'checked' : ''} onchange="toggleFileSource('${source.id}', event)">
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
+                const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                const ftitle = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
+                if (cls) fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
+              }
+              const baseName = fo.path ? (fo.path.split('/').pop() || fo.path) : '';
+              const displayName = escHtml(fo.label || baseName || ('File ' + (i + 1)));
+              const foPath = escHtml(fo.path || 'No path set');
+              const dimmed = !foEnabled ? 'style="opacity:0.45"' : '';
+              return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + foPath + '" ' + dimmed + '>' + displayName + '</span>' + fhDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + (foEnabled ? 'checked' : '') + ' onchange="toggleFileOutput(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
+            }).join('')}
+          </div>` : ''}
         </div>
       </div>
     </div>`;
@@ -614,10 +636,19 @@ function renderForm(source) {
 
       <div id="ctab-file" class="cfg-tab-panel ${activeTab !== 'file' ? 'hidden' : ''}">
         <div class="form-group">
-          <label>File Path</label>
-          <input type="text" name="filePath" id="form-filePath" value="${escHtml(source?.filePath || '')}" placeholder="/tmp/telemetry.log">
-          <small style="color:var(--text-muted);font-size:11px;margin-top:4px;display:block;">Rotation: 10MB max · 2 files · auto-cleanup after 1 day</small>
-          <small style="color:var(--text-muted);font-size:11px;margin-top:4px;display:block;">Must be writable by current user (e.g., /tmp/telemetry.log or ~/telemetry.log)</small>
+          <label>File Outputs</label>
+          <div id="file-outputs-list">
+            ${((source?.fileOutputs || []).length > 0 ? source.fileOutputs : [{ path: '', label: 'File', enabled: true }]).map((fo, i) =>
+              '<div class="endpoint-row" data-idx="' + i + '">' +
+              '<input type="text" class="fo-label" value="' + escHtml(fo.label || 'File') + '" placeholder="Label" style="max-width:90px">' +
+              '<input type="text" class="fo-path" value="' + escHtml(fo.path || '') + '" placeholder="/tmp/telemetry.log">' +
+              '<label class="toggle toggle-sm"><input type="checkbox" class="fo-enabled" ' + (fo.enabled !== false ? 'checked' : '') + '><span class="toggle-slider"></span></label>' +
+              '<button type="button" class="btn-remove-ep" onclick="removeFileOutput(this)">&times;</button>' +
+              '</div>'
+            ).join('')}
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addFileOutput()">+ Add File</button>
+          <small style="color:var(--text-muted);font-size:11px;margin-top:6px;display:block;">Rotation: 10MB max · 2 files · auto-cleanup after 1 day · path must be writable</small>
         </div>
       </div>
 
@@ -670,19 +701,28 @@ function setupFormListeners() {
     const form = e.target;
     const id = form.dataset.id || null;
     const endpointUrls = [];
-    document.querySelectorAll('.endpoint-row').forEach(row => {
+    document.querySelectorAll('#endpoints-list .endpoint-row').forEach(row => {
       endpointUrls.push({
         label: row.querySelector('.ep-label').value || 'Endpoint',
         url: row.querySelector('.ep-url').value,
         enabled: row.querySelector('.ep-enabled').checked
       });
     });
+    const fileOutputs = [];
+    document.querySelectorAll('#file-outputs-list .endpoint-row').forEach(row => {
+      fileOutputs.push({
+        label: row.querySelector('.fo-label').value || 'File',
+        path: row.querySelector('.fo-path').value,
+        enabled: row.querySelector('.fo-enabled').checked
+      });
+    });
     const formData = {
-      name: form.name.value,
-      dataType: form.dataType.value,
-      subType: form.subType.value,
-      format: form.format.value,
-      filePath: form.filePath?.value || '',
+      name: form.elements['name'].value,
+      dataType: form.elements['dataType'].value,
+      subType: form.elements['subType'].value,
+      format: form.elements['format'].value,
+      fileOutputs,
+      filePath: fileOutputs[0]?.path || '',
       endpointUrls,
       intervalSeconds: parseInt(form.intervalSeconds.value),
       volumePerInterval: parseInt(form.volumePerInterval.value),
@@ -716,12 +756,33 @@ function removeEndpoint(btn) {
   }
 }
 
+function addFileOutput() {
+  var list = document.getElementById('file-outputs-list');
+  var idx = list.children.length;
+  var row = document.createElement('div');
+  row.className = 'endpoint-row';
+  row.dataset.idx = idx;
+  row.innerHTML = '<input type="text" class="fo-label" value="File ' + (idx + 1) + '" placeholder="Label" style="max-width:90px">' +
+    '<input type="text" class="fo-path" value="" placeholder="/tmp/telemetry.log">' +
+    '<label class="toggle toggle-sm"><input type="checkbox" class="fo-enabled" checked><span class="toggle-slider"></span></label>' +
+    '<button type="button" class="btn-remove-ep" onclick="removeFileOutput(this)">&times;</button>';
+  list.appendChild(row);
+}
+
+function removeFileOutput(btn) {
+  var row = btn.closest('.endpoint-row');
+  var list = document.getElementById('file-outputs-list');
+  if (list.children.length > 1) {
+    row.remove();
+  }
+}
+
 function openModal() {
-  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('modal-overlay').classList.add('open');
 }
 
 function closeModal() {
-  document.getElementById('modal-overlay').classList.add('hidden');
+  document.getElementById('modal-overlay').classList.remove('open');
 }
 
 function formatNumber(n) {
@@ -874,6 +935,9 @@ document.getElementById('btn-stop-all').addEventListener('click', async () => {
 document.querySelector('.modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-overlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
 });
 
 document.querySelectorAll('.btn-filter').forEach(btn => {

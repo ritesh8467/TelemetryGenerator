@@ -24,8 +24,13 @@ sourceRouter.get('/', (req, res) => {
   const draft = config.getDraft();
   const published = config.getAll();
   const sources = (draft ? draft.sources : published).map(s => {
+    // Inline migration: populate fileOutputs from legacy filePath if missing
+    if (!s.fileOutputs) {
+      s = { ...s, fileOutputs: s.filePath ? [{ path: s.filePath, label: 'File', enabled: !!s.fileEnabled }] : [] };
+    }
     const anyEpEnabled = (s.endpointUrls || []).some(ep => ep.enabled !== false);
-    const active = isActive(s.id) || anyEpEnabled || !!s.fileEnabled;
+    const anyFileEnabled = (s.fileOutputs || []).some(f => f.enabled !== false);
+    const active = isActive(s.id) || anyEpEnabled || anyFileEnabled;
     const rawHealth = getHealthStatus(s.id);
     const health = rawHealth || (active ? { status: 'pending' } : null);
     const published_s = published.find(ps => ps.id === s.id);
@@ -42,13 +47,10 @@ sourceRouter.post('/stop-all', (req, res) => {
   stopAll();
   const draft = config.getDraft();
   const baseSources = draft ? draft.sources : config.getAll();
-  const updated = baseSources.map(source => ({
-    ...source,
-    httpEnabled: false,
-    fileEnabled: false,
-    enabled: false,
-    endpointUrls: (source.endpointUrls || []).map(ep => ({ ...ep, enabled: false }))
-  }));
+  const updated = baseSources.map(source => {
+    const fileOutputs = (source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: false }] : [])).map(f => ({ ...f, enabled: false }));
+    return { ...source, httpEnabled: false, fileEnabled: false, enabled: false, endpointUrls: (source.endpointUrls || []).map(ep => ({ ...ep, enabled: false })), fileOutputs };
+  });
   config.saveDraft(updated);
   res.json({ stopped: updated.length });
 });
@@ -56,13 +58,10 @@ sourceRouter.post('/stop-all', (req, res) => {
 sourceRouter.post('/start-all', (req, res) => {
   const draft = config.getDraft();
   const baseSources = draft ? draft.sources : config.getAll();
-  const updated = baseSources.map(source => ({
-    ...source,
-    httpEnabled: true,
-    fileEnabled: true,
-    enabled: true,
-    endpointUrls: (source.endpointUrls || []).map(ep => ({ ...ep, enabled: true }))
-  }));
+  const updated = baseSources.map(source => {
+    const fileOutputs = (source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: true }] : [])).map(f => ({ ...f, enabled: true }));
+    return { ...source, httpEnabled: true, fileEnabled: fileOutputs.length > 0, enabled: true, endpointUrls: (source.endpointUrls || []).map(ep => ({ ...ep, enabled: true })), fileOutputs };
+  });
   config.saveDraft(updated);
   startAll();
   res.json({ started: updated.length });
@@ -78,16 +77,20 @@ sourceRouter.post('/', (req, res) => {
   const endpointUrls = normalizeEndpoints(req.body);
   const httpEnabled = req.body.httpEnabled ?? false;
   const fileEnabled = req.body.fileEnabled ?? false;
+  const fileOutputs = Array.isArray(req.body.fileOutputs)
+    ? req.body.fileOutputs.map(f => ({ path: f.path || '', label: f.label || 'File', enabled: f.enabled !== false }))
+    : (req.body.filePath ? [{ path: req.body.filePath, label: 'File', enabled: fileEnabled }] : []);
   const source = {
     id: uuidv4(),
     name: req.body.name || 'Untitled Source',
     httpEnabled,
-    fileEnabled,
-    enabled: httpEnabled || fileEnabled,
+    fileEnabled: fileOutputs.some(f => f.enabled !== false),
+    enabled: httpEnabled || fileOutputs.some(f => f.enabled !== false),
     dataType: req.body.dataType,
     subType: req.body.subType,
     endpointUrls,
-    filePath: req.body.filePath || '',
+    fileOutputs,
+    filePath: fileOutputs[0]?.path || '',
     intervalSeconds: req.body.intervalSeconds || 10,
     volumePerInterval: req.body.volumePerInterval || 50,
     format: req.body.format || 'text',
@@ -254,19 +257,23 @@ sourceRouter.post('/:id/toggle', (req, res) => {
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
   const anyEpEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-  const isCurrentlyActive = source.enabled !== false || anyEpEnabled || !!source.fileEnabled;
+  const anyFileEnabled = (source.fileOutputs || []).some(f => f.enabled !== false);
+  const isCurrentlyActive = source.enabled !== false || anyEpEnabled || anyFileEnabled;
 
   if (isCurrentlyActive) {
     source.httpEnabled = false;
     source.fileEnabled = false;
     source.enabled = false;
     source.endpointUrls = (source.endpointUrls || []).map(ep => ({ ...ep, enabled: false }));
+    source.fileOutputs = (source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: false }] : [])).map(f => ({ ...f, enabled: false }));
     stop(source.id);
   } else {
-    source.httpEnabled = true;
-    source.fileEnabled = !!source.filePath;
+    const migratedFileOutputs = source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: true }] : []);
+    source.httpEnabled = (source.endpointUrls || []).length > 0;
+    source.fileEnabled = migratedFileOutputs.length > 0;
     source.enabled = true;
     source.endpointUrls = (source.endpointUrls || []).map(ep => ({ ...ep, enabled: true }));
+    source.fileOutputs = migratedFileOutputs.map(f => ({ ...f, enabled: true }));
     start(source.id);
   }
 
@@ -339,20 +346,7 @@ sourceRouter.post('/:id/toggle-file', (req, res) => {
 sourceRouter.post('/:id/toggle-endpoint/:index', (req, res) => {
   const epIndex = parseInt(req.params.index);
 
-  const draft = config.getDraft();
-  if (draft) {
-    const draftSource = draft.sources.find(s => s.id === req.params.id);
-    if (!draftSource) return res.status(404).json({ error: 'Source not found' });
-    if (!draftSource.endpointUrls?.[epIndex]) return res.status(404).json({ error: 'Endpoint not found' });
-
-    draftSource.endpointUrls[epIndex].enabled = !draftSource.endpointUrls[epIndex].enabled;
-    const anyEnabled = draftSource.endpointUrls.some(ep => ep.enabled !== false);
-    draftSource.httpEnabled = anyEnabled;
-    draftSource.enabled = anyEnabled || draftSource.fileEnabled;
-    config.saveDraft(draft.sources);
-    return res.json({ ...draftSource, active: isActive(draftSource.id) });
-  }
-
+  // Always update published so the worker picks up the change immediately.
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
   if (!source.endpointUrls?.[epIndex]) return res.status(404).json({ error: 'Endpoint not found' });
@@ -361,12 +355,61 @@ sourceRouter.post('/:id/toggle-endpoint/:index', (req, res) => {
   source.endpointUrls[epIndex].enabled = !source.endpointUrls[epIndex].enabled;
   const anyEnabled = source.endpointUrls.some(ep => ep.enabled !== false);
   source.httpEnabled = anyEnabled;
-  source.enabled = anyEnabled || source.fileEnabled;
+  source.enabled = anyEnabled || (source.fileOutputs || []).some(f => f.enabled !== false);
   config.upsert(source);
 
   if (!wasEnabled && source.enabled) start(source.id);
   else if (wasEnabled && !source.enabled) stop(source.id);
   else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
+
+  // Sync the same change to the draft so the UI stays consistent.
+  const draft = config.getDraft();
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === req.params.id);
+    if (draftSource?.endpointUrls?.[epIndex] !== undefined) {
+      draftSource.endpointUrls[epIndex].enabled = source.endpointUrls[epIndex].enabled;
+      draftSource.httpEnabled = source.httpEnabled;
+      draftSource.enabled = source.enabled;
+      config.saveDraft(draft.sources);
+    }
+  }
+
+  res.json({ ...source, active: isActive(source.id) });
+});
+
+sourceRouter.post('/:id/toggle-file-output/:index', (req, res) => {
+  const foIndex = parseInt(req.params.index);
+
+  // Always update published so the worker picks up the change immediately.
+  const source = config.getOne(req.params.id);
+  if (!source) return res.status(404).json({ error: 'Source not found' });
+  if (!source.fileOutputs?.[foIndex]) return res.status(404).json({ error: 'File output not found' });
+
+  const wasEnabled = source.enabled;
+  source.fileOutputs[foIndex].enabled = !source.fileOutputs[foIndex].enabled;
+  const anyFileEnabled = source.fileOutputs.some(f => f.enabled !== false);
+  source.fileEnabled = anyFileEnabled;
+  const anyEpEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
+  source.enabled = anyEpEnabled || anyFileEnabled;
+  source.filePath = source.fileOutputs[0]?.path || '';
+  config.upsert(source);
+
+  if (!wasEnabled && source.enabled) start(source.id);
+  else if (wasEnabled && !source.enabled) stop(source.id);
+  else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
+
+  // Sync the same change to the draft so the UI stays consistent.
+  const draft = config.getDraft();
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === req.params.id);
+    if (draftSource?.fileOutputs?.[foIndex] !== undefined) {
+      draftSource.fileOutputs[foIndex].enabled = source.fileOutputs[foIndex].enabled;
+      draftSource.fileEnabled = source.fileEnabled;
+      draftSource.enabled = source.enabled;
+      draftSource.filePath = source.filePath;
+      config.saveDraft(draft.sources);
+    }
+  }
 
   res.json({ ...source, active: isActive(source.id) });
 });
