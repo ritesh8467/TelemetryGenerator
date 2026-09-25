@@ -90,6 +90,12 @@ async function toggleFileSource(id, e) {
   await fetchSources();
 }
 
+async function toggleEndpoint(sourceId, epIndex, e) {
+  e.stopPropagation();
+  await fetch(`${API}/sources/${sourceId}/toggle-endpoint/${epIndex}`, { method: 'POST' });
+  await fetchSources();
+}
+
 async function duplicateSource(id) {
   await fetch(`${API}/sources/${id}/duplicate`, { method: 'POST' });
   closeModal();
@@ -340,26 +346,36 @@ function render() {
         <span><span class="status-dot ${(httpEnabled || fileEnabled) ? 'active' : 'inactive'}"></span>${(httpEnabled || fileEnabled) ? 'Running' : 'Stopped'}</span>
         <span>${formatNumber(source.stats?.messagesSent || 0)} sent</span>
         <span>${source.stats?.errors || 0} errors</span>
+        <span>${source.stats?.lastSentAt ? timeAgo(source.stats.lastSentAt) : 'Never sent'}</span>
       </div>${healthHints}
       <div class="source-card-footer">
-        <span style="font-size: 11px; color: var(--text-muted);">${source.stats?.lastSentAt ? timeAgo(source.stats.lastSentAt) : 'Never sent'}</span>
         <div class="export-toggles" onclick="event.stopPropagation()">
-          <div class="export-toggle-item">
-            <span class="export-toggle-label">HTTP</span>
-            ${httpEnabled ? '<span class="toggle-health" style="background:' + ((source.health?.endpoints || []).find(e => e.label !== 'File')?.status === 'green' ? 'var(--success)' : 'var(--danger)') + '"></span>' : ''}
-            <label class="toggle toggle-sm">
-              <input type="checkbox" ${httpEnabled ? 'checked' : ''} onchange="toggleHttpSource('${source.id}', event)">
-              <span class="toggle-slider"></span>
-            </label>
+          ${httpEnabled && (source.endpointUrls || []).length > 0 ? `
+          <div class="ep-toggles-grid">
+            ${(source.endpointUrls || []).map((ep, i) => {
+              const epHealth = (source.health?.endpoints || []).find(h => h.label === ep.label);
+              const healthDot = epHealth ? '<span class="toggle-health" style="background:' + (epHealth.status === 'green' ? 'var(--success)' : 'var(--danger)') + '"></span>' : '';
+              const label = escHtml(ep.label || 'EP' + (i + 1));
+              return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + label + '">' + label + '</span>' + healthDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + (ep.enabled ? 'checked' : '') + ' onchange="toggleEndpoint(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
+            }).join('')}
           </div>
-          <div class="export-toggle-divider"></div>
-          <div class="export-toggle-item">
-            <span class="export-toggle-label">File</span>
-            ${fileEnabled ? '<span class="toggle-health" style="background:' + ((source.health?.endpoints || []).find(e => e.label === 'File')?.status === 'green' ? 'var(--success)' : 'var(--danger)') + '"></span>' : ''}
-            <label class="toggle toggle-sm">
-              <input type="checkbox" ${fileEnabled ? 'checked' : ''} onchange="toggleFileSource('${source.id}', event)">
-              <span class="toggle-slider"></span>
-            </label>
+          <div class="ep-channel-divider"></div>` : ''}
+          <div class="channel-row">
+            <div class="export-toggle-item">
+              <span class="export-toggle-label">HTTP</span>
+              <label class="toggle toggle-sm">
+                <input type="checkbox" ${httpEnabled ? 'checked' : ''} onchange="toggleHttpSource('${source.id}', event)">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="export-toggle-item">
+              <span class="export-toggle-label">File</span>
+              ${fileEnabled ? '<span class="toggle-health" style="background:' + ((source.health?.endpoints || []).find(e => e.label === 'File')?.status === 'green' ? 'var(--success)' : 'var(--danger)') + '"></span>' : ''}
+              <label class="toggle toggle-sm">
+                <input type="checkbox" ${fileEnabled ? 'checked' : ''} onchange="toggleFileSource('${source.id}', event)">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
           </div>
         </div>
       </div>

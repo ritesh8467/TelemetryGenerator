@@ -331,3 +331,29 @@ sourceRouter.post('/:id/toggle-file', (req, res) => {
 
   res.json({ ...source, active: isActive(source.id) });
 });
+
+sourceRouter.post('/:id/toggle-endpoint/:index', (req, res) => {
+  const epIndex = parseInt(req.params.index);
+
+  const draft = config.getDraft();
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === req.params.id);
+    if (!draftSource) return res.status(404).json({ error: 'Source not found' });
+    if (!draftSource.endpointUrls?.[epIndex]) return res.status(404).json({ error: 'Endpoint not found' });
+
+    draftSource.endpointUrls[epIndex].enabled = !draftSource.endpointUrls[epIndex].enabled;
+    config.saveDraft(draft.sources);
+    return res.json({ ...draftSource, active: isActive(draftSource.id) });
+  }
+
+  const source = config.getOne(req.params.id);
+  if (!source) return res.status(404).json({ error: 'Source not found' });
+  if (!source.endpointUrls?.[epIndex]) return res.status(404).json({ error: 'Endpoint not found' });
+
+  source.endpointUrls[epIndex].enabled = !source.endpointUrls[epIndex].enabled;
+  config.upsert(source);
+
+  if (isActive(source.id)) { stop(source.id); start(source.id); }
+
+  res.json({ ...source, active: isActive(source.id) });
+});
