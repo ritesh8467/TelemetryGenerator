@@ -1,4 +1,5 @@
 import * as config from './config.js';
+import { get as getSettings } from './settings.js';
 import { createWorker } from './workers/sourceWorker.js';
 
 const activeWorkers = new Map();
@@ -9,7 +10,9 @@ export function start(sourceId) {
   if (!source) return;
 
   const worker = createWorker(source);
-  const timerId = setInterval(() => worker.tick(), source.intervalSeconds * 1000);
+  const s = getSettings();
+  const intervalMs = (s.overrideEnabled ? s.globalIntervalSeconds : source.intervalSeconds) * 1000;
+  const timerId = setInterval(() => worker.tick(), intervalMs);
   activeWorkers.set(sourceId, { timerId, worker });
   worker.tick();
 }

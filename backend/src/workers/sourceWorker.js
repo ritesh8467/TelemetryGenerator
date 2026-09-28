@@ -69,7 +69,9 @@ export function createWorker(source) {
           return;
         }
 
-        const records = generator.generate(source.volumePerInterval, { ...(source.metadata || {}), timezone: getSettings().timezone });
+        const settings = getSettings();
+        const volume = settings.overrideEnabled ? settings.globalVolumePerInterval : source.volumePerInterval;
+        const records = generator.generate(volume, { ...(source.metadata || {}), timezone: settings.timezone });
         const sender = getSender(source.dataType);
         if (!sender) {
           console.error(`No sender for ${source.dataType}`);
@@ -196,7 +198,7 @@ export function createWorker(source) {
                 acc + (rs.scopeSpans || []).reduce((a, ss) => a + (ss.spans?.length || 0), 0), 0) * successCount
             : 0;
           config.updateStats(source.id, {
-            messagesSent: (prevStats.messagesSent || 0) + (source.volumePerInterval * successCount),
+            messagesSent: (prevStats.messagesSent || 0) + (volume * successCount),
             errors: (prevStats.errors || 0) + failCount,
             lastSentAt: successCount > 0 ? now : (prevStats.lastSentAt || null),
             bytesSent: (prevStats.bytesSent || 0) + bytesThisTick,

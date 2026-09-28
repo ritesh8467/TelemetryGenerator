@@ -1,5 +1,5 @@
 const API = '/api';
-let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null, activeTab: 'telemetry', settings: { appName: 'Telemetry Generator', timezone: 'UTC', maxVersions: 10 } };
+let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null, activeTab: 'telemetry', settings: { appName: 'Telemetry Generator', timezone: 'UTC', maxVersions: 10, overrideEnabled: false, globalIntervalSeconds: 10, globalVolumePerInterval: 50 } };
 
 const SUB_TYPES = {
   logs: [
@@ -1034,6 +1034,8 @@ function renderSettingsPage() {
     `<option value="${tz}"${tz === s.timezone ? ' selected' : ''}>${tz}</option>`
   ).join('');
 
+  const overrideOn = !!s.overrideEnabled;
+
   document.getElementById('settings-content').innerHTML = `
     <div class="settings-page">
       <div class="settings-section">
@@ -1060,6 +1062,26 @@ function renderSettingsPage() {
           <input id="setting-maxversions" class="settings-input" type="number" min="1" max="100" value="${s.maxVersions || 10}">
         </div>
       </div>
+      <div class="settings-section">
+        <div class="settings-section-title">
+          Global Override
+          <label class="settings-toggle-label" title="When enabled, all sources use the interval and volume set below instead of their own values.">
+            <input type="checkbox" id="setting-override-enabled" ${overrideOn ? 'checked' : ''}>
+            <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+          </label>
+        </div>
+        <span class="settings-description" style="margin-bottom:12px;display:block;">When enabled, all sources ignore their own interval and volume and use the values below.</span>
+        <div class="settings-row settings-override-fields${overrideOn ? '' : ' settings-override-disabled'}">
+          <label class="settings-label" for="setting-global-interval">Interval (seconds)</label>
+          <span class="settings-description">How often every source generates and sends data. (1–86400)</span>
+          <input id="setting-global-interval" class="settings-input" type="number" min="1" max="86400" value="${s.globalIntervalSeconds || 10}" ${overrideOn ? '' : 'disabled'}>
+        </div>
+        <div class="settings-row settings-override-fields${overrideOn ? '' : ' settings-override-disabled'}">
+          <label class="settings-label" for="setting-global-volume">Volume per Interval</label>
+          <span class="settings-description">Number of records every source generates per tick. (1–10000)</span>
+          <input id="setting-global-volume" class="settings-input" type="number" min="1" max="10000" value="${s.globalVolumePerInterval || 50}" ${overrideOn ? '' : 'disabled'}>
+        </div>
+      </div>
       <div class="settings-save-row">
         <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
         <span class="settings-saved-indicator" id="settings-saved-indicator">Saved</span>
@@ -1067,11 +1089,24 @@ function renderSettingsPage() {
     </div>
   `;
 
+  // Toggle enables/disables the override input fields immediately
+  document.getElementById('setting-override-enabled').addEventListener('change', (e) => {
+    const on = e.target.checked;
+    document.querySelectorAll('.settings-override-fields').forEach(el => {
+      el.classList.toggle('settings-override-disabled', !on);
+    });
+    document.getElementById('setting-global-interval').disabled = !on;
+    document.getElementById('setting-global-volume').disabled = !on;
+  });
+
   document.getElementById('btn-save-settings').addEventListener('click', async () => {
     const appName = document.getElementById('setting-appname').value.trim();
     const timezone = document.getElementById('setting-timezone').value;
     const maxVersions = parseInt(document.getElementById('setting-maxversions').value, 10);
-    const ok = await saveSettings({ appName, timezone, maxVersions });
+    const overrideEnabled = document.getElementById('setting-override-enabled').checked;
+    const globalIntervalSeconds = parseInt(document.getElementById('setting-global-interval').value, 10);
+    const globalVolumePerInterval = parseInt(document.getElementById('setting-global-volume').value, 10);
+    const ok = await saveSettings({ appName, timezone, maxVersions, overrideEnabled, globalIntervalSeconds, globalVolumePerInterval });
     if (ok) {
       const ind = document.getElementById('settings-saved-indicator');
       if (ind) {

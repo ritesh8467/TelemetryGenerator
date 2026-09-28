@@ -8,7 +8,10 @@ const SETTINGS_PATH = join(__dirname, '..', 'data', 'settings.json');
 const DEFAULTS = {
   appName: 'Telemetry Generator',
   timezone: 'UTC',
-  maxVersions: 10
+  maxVersions: 10,
+  overrideEnabled: false,
+  globalIntervalSeconds: 10,
+  globalVolumePerInterval: 50
 };
 
 let settings = { ...DEFAULTS };
@@ -53,6 +56,19 @@ export function save(updates) {
     const n = parseInt(updates.maxVersions, 10);
     if (isNaN(n) || n < 1 || n > 100) throw new Error('maxVersions must be between 1 and 100');
     validated.maxVersions = n;
+  }
+  if (updates.overrideEnabled !== undefined) {
+    validated.overrideEnabled = !!updates.overrideEnabled;
+  }
+  if (updates.globalIntervalSeconds !== undefined) {
+    const n = parseInt(updates.globalIntervalSeconds, 10);
+    if (isNaN(n) || n < 1 || n > 86400) throw new Error('globalIntervalSeconds must be between 1 and 86400');
+    validated.globalIntervalSeconds = n;
+  }
+  if (updates.globalVolumePerInterval !== undefined) {
+    const n = parseInt(updates.globalVolumePerInterval, 10);
+    if (isNaN(n) || n < 1 || n > 10000) throw new Error('globalVolumePerInterval must be between 1 and 10000');
+    validated.globalVolumePerInterval = n;
   }
   settings = { ...settings, ...validated };
   writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
