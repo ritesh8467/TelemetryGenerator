@@ -14,7 +14,9 @@ export async function send(traceData, endpointUrl, format, metadata = {}) {
   if (metadata.sourceName) headers['X-Sumo-Name'] = metadata.sourceName;
 
   let url = endpointUrl;
-  if (!url.endsWith('/v1/traces') && !url.includes('receiver/v1/http')) {
+  // Only append /v1/traces for generic OTLP collector endpoints.
+  // Sumo Logic receiver URLs (receiver/v1/trace, receiver/v1/http, etc.) are already complete.
+  if (!url.endsWith('/v1/traces') && !url.includes('receiver/v1/')) {
     url = url.replace(/\/$/, '') + '/v1/traces';
   }
 

@@ -1,5 +1,17 @@
 import { faker } from '@faker-js/faker';
 
+function toOtlpAttributes(obj) {
+  return Object.entries(obj || {}).map(([key, val]) => {
+    let value;
+    if (typeof val === 'string') value = { stringValue: val };
+    else if (typeof val === 'boolean') value = { boolValue: val };
+    else if (Number.isInteger(val)) value = { intValue: val };
+    else if (typeof val === 'number') value = { doubleValue: val };
+    else value = { stringValue: String(val) };
+    return { key, value };
+  });
+}
+
 function generateSpan(spanId, parentSpanId, traceId, startTime, duration, name, status = 'OK', attributes = {}) {
   return {
     traceId,
@@ -9,7 +21,7 @@ function generateSpan(spanId, parentSpanId, traceId, startTime, duration, name, 
     kind: 1,
     startTimeUnixNano: (startTime * 1e9).toString(),
     endTimeUnixNano: ((startTime + duration) * 1e9).toString(),
-    attributes,
+    attributes: toOtlpAttributes(attributes),
     status: { code: status === 'OK' ? 0 : 2 },
     events: []
   };
@@ -137,12 +149,12 @@ export function generate(count, metadata = {}) {
       resourceSpans: [
         {
           resource: {
-            attributes: {
+            attributes: toOtlpAttributes({
               'service.name': metadata.serviceName || 'genai-app',
               'service.version': '1.0.0',
               'telemetry.sdk.name': 'opentelemetry',
               'telemetry.sdk.language': 'nodejs'
-            }
+            })
           },
           scopeSpans: [
             {
