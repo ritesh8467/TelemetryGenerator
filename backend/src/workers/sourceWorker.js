@@ -150,15 +150,26 @@ export function createWorker(source) {
           return;
         }
 
-        // Merge with previous endpoint health so disabled endpoints keep their last
-        // known status (only overwrite entries that were actually attempted this tick).
+        // Build set of URLs/labels that are currently configured (enabled or disabled)
+        // so stale entries from old/removed endpoints are not preserved.
+        const configuredUrls = new Set([
+          ...(currentSource?.endpointUrls || source.endpointUrls || []).map(ep => ep.url).filter(Boolean),
+          ...(currentSource?.fileOutputs || source.fileOutputs || []).map(f => f.path).filter(Boolean)
+        ]);
+        const configuredFileLabels = new Set(
+          (currentSource?.fileOutputs || source.fileOutputs || []).map(f => f.label || 'File')
+        );
+
+        // Merge previous health for endpoints still in config; overwrite with this tick's results.
         const prevEndpoints = (healthStatus.get(source.id) || {}).endpoints || [];
         const epMap = new Map();
         for (const prev of prevEndpoints) {
-          epMap.set((prev.url || '') + '|||' + (prev.label || ''), prev);
+          // Drop stale entries: keep only if URL is still configured, or (no URL) label still exists
+          const stillValid = prev.url ? configuredUrls.has(prev.url) : configuredFileLabels.has(prev.label || '');
+          if (stillValid) epMap.set(prev.url || ('label:' + (prev.label || '')), prev);
         }
         for (const ep of allEpHealth) {
-          epMap.set((ep.url || '') + '|||' + (ep.label || ''), ep);
+          epMap.set(ep.url || ('label:' + (ep.label || '')), ep);
         }
         const mergedEndpoints = [...epMap.values()];
 

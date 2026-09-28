@@ -372,7 +372,9 @@ function render() {
           <div class="export-toggle-section-label">HTTP Endpoints</div>
           <div class="ep-toggles-grid">
             ${(source.endpointUrls || []).map((ep, i) => {
-              const epHealth = (source.health?.endpoints || []).find(h => h.label === ep.label || h.url === ep.url);
+              const epHealth = ep.url
+                ? (source.health?.endpoints || []).find(h => h.url === ep.url)
+                : (source.health?.endpoints || []).find(h => h.label === ep.label);
               const isEnabled = ep.enabled !== false;
               let healthDot = '';
               if (isEnabled) {
@@ -399,7 +401,9 @@ function render() {
           <div class="ep-toggles-grid">
             ${(source.fileOutputs || []).map((fo, i) => {
               const foEnabled = fo.enabled !== false;
-              const fh = (source.health?.endpoints || []).find(e => e.label === (fo.label || 'File') || e.url === fo.path);
+              const fh = fo.path
+                ? (source.health?.endpoints || []).find(e => e.url === fo.path)
+                : (source.health?.endpoints || []).find(e => e.label === (fo.label || 'File'));
               let fhDot = '';
               if (foEnabled) {
                 if (!fo.path) {
