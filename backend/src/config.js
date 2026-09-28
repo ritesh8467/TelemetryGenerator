@@ -365,7 +365,7 @@ export function getVersions() {
 
 export function getVersion(versionNumber) {
   try {
-    const versions = getVersions();
+    const { versions } = getVersions();
     const vInfo = versions.find(v => v.version === versionNumber);
     if (!vInfo) return null;
 
