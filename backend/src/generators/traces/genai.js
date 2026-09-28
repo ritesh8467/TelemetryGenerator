@@ -1,40 +1,54 @@
 import { faker } from '@faker-js/faker';
 
+function hexId(length) {
+  // faker.string.hexadecimal includes a '0x' prefix by default — strip it and lowercase
+  return faker.string.hexadecimal({ length, prefix: '' }).toLowerCase();
+}
+
+function toNano(seconds) {
+  // Use BigInt to avoid float precision loss on nanosecond timestamps
+  const ms = Math.round(seconds * 1000);
+  return (BigInt(ms) * 1_000_000n).toString();
+}
+
 function toOtlpAttributes(obj) {
   return Object.entries(obj || {}).map(([key, val]) => {
     let value;
     if (typeof val === 'string') value = { stringValue: val };
     else if (typeof val === 'boolean') value = { boolValue: val };
-    else if (Number.isInteger(val)) value = { intValue: val };
+    // OTLP proto JSON encoding: sint64 (intValue) must be a decimal string
+    else if (Number.isInteger(val)) value = { intValue: String(val) };
     else if (typeof val === 'number') value = { doubleValue: val };
     else value = { stringValue: String(val) };
     return { key, value };
   });
 }
 
-function generateSpan(spanId, parentSpanId, traceId, startTime, duration, name, status = 'OK', attributes = {}) {
-  return {
+function generateSpan(spanId, parentSpanId, traceId, startSec, durationSec, name, status = 'OK', attributes = {}) {
+  const span = {
     traceId,
     spanId,
-    parentSpanId: parentSpanId || '',
     name,
     kind: 1,
-    startTimeUnixNano: (startTime * 1e9).toString(),
-    endTimeUnixNano: ((startTime + duration) * 1e9).toString(),
+    startTimeUnixNano: toNano(startSec),
+    endTimeUnixNano: toNano(startSec + durationSec),
     attributes: toOtlpAttributes(attributes),
-    status: { code: status === 'OK' ? 0 : 2 },
+    status: { code: status === 'OK' ? 1 : 2 },
     events: []
   };
+  // Only include parentSpanId when there is one — omit for root spans
+  if (parentSpanId) span.parentSpanId = parentSpanId;
+  return span;
 }
 
 export function generate(count, metadata = {}) {
   const traces = [];
 
   for (let i = 0; i < count; i++) {
-    const traceId = faker.string.hexadecimal({ length: 32 }).toLowerCase();
-    const baseTime = Math.floor(Date.now() / 1000);
+    const traceId = hexId(32);
+    const baseTime = Date.now() / 1000;
 
-    const llmRequestSpanId = faker.string.hexadecimal({ length: 16 }).toLowerCase();
+    const llmRequestSpanId = hexId(16);
     const llmRequestStartTime = baseTime - Math.random() * 5;
     const llmRequestDuration = 0.5 + Math.random() * 2;
 
@@ -66,8 +80,8 @@ export function generate(count, metadata = {}) {
       'gen_ai.system': 'openai',
       'gen_ai.request.model': model,
       'gen_ai.request.max_tokens': faker.number.int({ min: 100, max: 2000 }),
-      'gen_ai.request.temperature': faker.number.float({ min: 0, max: 2, precision: 0.01 }),
-      'gen_ai.request.top_p': faker.number.float({ min: 0, max: 1, precision: 0.01 }),
+      'gen_ai.request.temperature': faker.number.float({ min: 0, max: 2, multipleOf: 0.01 }),
+      'gen_ai.request.top_p': faker.number.float({ min: 0, max: 1, multipleOf: 0.01 }),
       'gen_ai.prompt.0.role': 'system',
       'gen_ai.prompt.0.content': systemPrompt,
       'gen_ai.prompt.1.role': 'user',
@@ -76,7 +90,7 @@ export function generate(count, metadata = {}) {
       'gen_ai.usage.completion_tokens': faker.number.int({ min: 100, max: 1000 }),
       'gen_ai.response.0.finish_reason': 'stop',
       'gen_ai.response.0.role': 'assistant',
-      'gen_ai.response.0.content': faker.lorem.paragraphs(2),
+      'gen_ai.response.0.content': faker.lorem.sentences(3),
       'server.address': 'api.openai.com',
       'http.request.method': 'POST',
       'http.response.status_code': 200
@@ -84,7 +98,7 @@ export function generate(count, metadata = {}) {
 
     const llmRequestSpan = generateSpan(
       llmRequestSpanId,
-      '',
+      null,
       traceId,
       llmRequestStartTime,
       llmRequestDuration,
@@ -93,19 +107,16 @@ export function generate(count, metadata = {}) {
       llmRequestAttributes
     );
 
-    // Embedding span (optional, for some traces)
-    let embeddingSpan = null;
-    if (Math.random() > 0.6) {
-      const embeddingSpanId = faker.string.hexadecimal({ length: 16 }).toLowerCase();
-      const embeddingStartTime = llmRequestStartTime + 0.1;
-      const embeddingDuration = 0.2;
+    const spans = [llmRequestSpan];
 
-      embeddingSpan = generateSpan(
-        embeddingSpanId,
+    // Embedding span (optional)
+    if (Math.random() > 0.6) {
+      spans.push(generateSpan(
+        hexId(16),
         llmRequestSpanId,
         traceId,
-        embeddingStartTime,
-        embeddingDuration,
+        llmRequestStartTime + 0.1,
+        0.2,
         'gen_ai.embedding',
         'OK',
         {
@@ -114,22 +125,17 @@ export function generate(count, metadata = {}) {
           'gen_ai.request.embedding_dimension': 1536,
           'gen_ai.usage.prompt_tokens': 25
         }
-      );
+      ));
     }
 
     // Retrieval span (optional)
-    let retrievalSpan = null;
     if (Math.random() > 0.7) {
-      const retrievalSpanId = faker.string.hexadecimal({ length: 16 }).toLowerCase();
-      const retrievalStartTime = llmRequestStartTime + 0.05;
-      const retrievalDuration = 0.3;
-
-      retrievalSpan = generateSpan(
-        retrievalSpanId,
+      spans.push(generateSpan(
+        hexId(16),
         llmRequestSpanId,
         traceId,
-        retrievalStartTime,
-        retrievalDuration,
+        llmRequestStartTime + 0.05,
+        0.3,
         'gen_ai.retrieval',
         'OK',
         {
@@ -138,12 +144,8 @@ export function generate(count, metadata = {}) {
           'db.system': 'pinecone',
           'db.query_time_ms': faker.number.int({ min: 100, max: 500 })
         }
-      );
+      ));
     }
-
-    const spans = [llmRequestSpan];
-    if (embeddingSpan) spans.push(embeddingSpan);
-    if (retrievalSpan) spans.push(retrievalSpan);
 
     traces.push({
       resourceSpans: [
@@ -158,9 +160,7 @@ export function generate(count, metadata = {}) {
           },
           scopeSpans: [
             {
-              scope: {
-                name: 'genai-tracer'
-              },
+              scope: { name: 'genai-tracer' },
               spans
             }
           ]
@@ -169,6 +169,5 @@ export function generate(count, metadata = {}) {
     });
   }
 
-  // Return array of traces
   return traces;
 }
