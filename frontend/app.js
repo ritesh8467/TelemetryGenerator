@@ -232,6 +232,7 @@ async function showVersionHistory() {
       return;
     }
 
+    const current = data.currentVersion;
     container.innerHTML = `<table class="versions-table" style="width:100%; border-collapse: collapse;">
       <tr style="border-bottom: 1px solid var(--border); font-weight: 500;">
         <td style="padding: 8px;">Version</td>
@@ -239,17 +240,22 @@ async function showVersionHistory() {
         <td style="padding: 8px;">Sources</td>
         <td style="padding: 8px; text-align: right;">Actions</td>
       </tr>
-      ${data.versions.map(v => `
-        <tr style="border-bottom: 1px solid var(--border);">
-          <td style="padding: 8px;">v${v.version}</td>
+      ${data.versions.map(v => {
+        const isCurrent = v.version === current;
+        return `
+        <tr style="border-bottom: 1px solid var(--border);${isCurrent ? ' background: var(--bg-hover, rgba(var(--accent-rgb,59,130,246),0.06));' : ''}">
+          <td style="padding: 8px;">
+            v${v.version}
+            ${isCurrent ? '<span style="margin-left:6px;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:var(--success);color:#fff;">Current</span>' : ''}
+          </td>
           <td style="padding: 8px; font-size: 12px; color: var(--text-muted);">${new Date(v.publishedAt).toLocaleString()}</td>
           <td style="padding: 8px;">${v.sourceCount}</td>
           <td style="padding: 8px; text-align: right;">
             <button class="btn btn-sm btn-secondary" onclick="previewVersion(${v.version})">Preview</button>
-            <button class="btn btn-sm btn-primary" onclick="restoreVersion(${v.version})">Restore</button>
+            ${isCurrent ? '' : `<button class="btn btn-sm btn-primary" onclick="restoreVersion(${v.version})">Restore</button>`}
           </td>
-        </tr>
-      `).join('')}
+        </tr>`;
+      }).join('')}
     </table>`;
   } catch (err) {
     const container = document.getElementById('versions-list');
@@ -293,9 +299,8 @@ async function restoreVersion(version) {
     const res = await fetch(`${API}/config/versions/${version}/restore`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
-      closeModal();
-      await fetchSources();
-      await fetchConfigStatus();
+      await Promise.all([fetchSources(), fetchConfigStatus()]);
+      showVersionHistory();
     } else {
       alert('Failed to restore: ' + (data.error || 'Unknown error'));
     }

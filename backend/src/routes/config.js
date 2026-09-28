@@ -37,7 +37,7 @@ function countDraftChanges(draftSources, publishedSources) {
 configRouter.get('/status', (req, res) => {
   const draftData = config.getDraft();
   const publishedSources = config.getAll();
-  const versions = config.getVersions();
+  const { versions, currentVersion } = config.getVersions();
 
   let hasDraft = false;
   let draftChanges = 0;
@@ -48,8 +48,6 @@ configRouter.get('/status', (req, res) => {
     draftSavedAt = draftData.savedAt;
     draftChanges = countDraftChanges(draftData.sources, publishedSources);
   }
-
-  const currentVersion = versions.length > 0 ? versions[0].version : null;
 
   res.json({
     hasDraft,
@@ -87,8 +85,8 @@ configRouter.post('/publish', (req, res) => {
 });
 
 configRouter.get('/versions', (req, res) => {
-  const versions = config.getVersions();
-  res.json({ versions });
+  const { versions, currentVersion } = config.getVersions();
+  res.json({ versions, currentVersion });
 });
 
 configRouter.get('/versions/:n', (req, res) => {

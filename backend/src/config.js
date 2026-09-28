@@ -316,6 +316,7 @@ function saveToVersionHistory() {
 
     versionIndex.versions.unshift({ version, publishedAt, filename, sourceCount: config.sources.length });
     versionIndex.nextVersion = version + 1;
+    versionIndex.currentVersion = version;
 
     if (versionIndex.versions.length > 10) {
       const removed = versionIndex.versions.pop();
@@ -349,13 +350,16 @@ export function publish(draftSources) {
 
 export function getVersions() {
   try {
-    if (!existsSync(VERSIONS_INDEX)) return [];
+    if (!existsSync(VERSIONS_INDEX)) return { versions: [], currentVersion: null };
     const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
     const index = JSON.parse(raw);
-    return index.versions || [];
+    const versions = index.versions || [];
+    // Backfill: if currentVersion was never stored, assume most recently published
+    const currentVersion = index.currentVersion || (versions.length > 0 ? versions[0].version : null);
+    return { versions, currentVersion };
   } catch (err) {
     console.error('Failed to read versions:', err.message);
-    return [];
+    return { versions: [], currentVersion: null };
   }
 }
 
@@ -379,10 +383,20 @@ export function restoreVersion(versionNumber) {
     const version = getVersion(versionNumber);
     if (!version) return { success: false, error: 'Version not found' };
 
+    // Save current state as a new snapshot before overwriting
     saveToVersionHistory();
+
+    // Apply the restored sources
     config.sources = version.sources;
     writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
     discardDraft();
+
+    // Mark the restored version as the current running version
+    const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
+    const versionIndex = JSON.parse(raw);
+    versionIndex.currentVersion = versionNumber;
+    writeFileSync(VERSIONS_INDEX, JSON.stringify(versionIndex, null, 2));
+
     return { success: true };
   } catch (err) {
     console.error('Failed to restore version:', err.message);
