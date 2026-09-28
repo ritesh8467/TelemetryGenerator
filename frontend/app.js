@@ -227,33 +227,138 @@ async function showVersionHistory() {
   }
 }
 
+// ── Version diff helpers ──────────────────────────────────────────────────────
+
+const DIFF_FIELDS = [
+  ['name',               'Name'],
+  ['dataType',           'Data Type'],
+  ['subType',            'Sub Type'],
+  ['format',             'Format'],
+  ['intervalSeconds',    'Interval (s)'],
+  ['volumePerInterval',  'Volume'],
+  ['endpointUrls',       'Endpoints'],
+  ['fileOutputs',        'File Outputs'],
+  ['metadata',           'Metadata'],
+];
+
+function stripOps(s) {
+  const { enabled, httpEnabled, fileEnabled, active, health, draftOnly, stats, ...rest } = s;
+  return {
+    ...rest,
+    endpointUrls: (rest.endpointUrls || []).map(({ enabled: _e, ...ep }) => ep),
+    fileOutputs:  (rest.fileOutputs  || []).map(({ enabled: _e, ...fo }) => fo),
+  };
+}
+
+function fieldLabel(key, val) {
+  if (val === null || val === undefined) return '—';
+  if (typeof val === 'object') {
+    if (Array.isArray(val)) {
+      if (val.length === 0) return '(none)';
+      if (key === 'endpointUrls') return val.map(ep => ep.label ? `${ep.label}: ${ep.url}` : ep.url).join(', ');
+      if (key === 'fileOutputs')  return val.map(fo => fo.label ? `${fo.label}: ${fo.path}` : fo.path).join(', ');
+      return JSON.stringify(val);
+    }
+    return Object.entries(val).filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join(', ') || '—';
+  }
+  return String(val);
+}
+
+function computeVersionDiff(vSources, curSources) {
+  const vMap  = new Map(vSources.map(s => [s.id, stripOps(s)]));
+  const cMap  = new Map(curSources.map(s => [s.id, stripOps(s)]));
+  const added = [], removed = [], modified = [], unchanged = [];
+
+  for (const [id, cur] of cMap) {
+    if (!vMap.has(id)) { added.push(cur); continue; }
+    const v = vMap.get(id);
+    const changes = [];
+    for (const [key] of DIFF_FIELDS) {
+      const vv = JSON.stringify(v[key] ?? null);
+      const cv = JSON.stringify(cur[key] ?? null);
+      if (vv !== cv) changes.push({ key, from: v[key], to: cur[key] });
+    }
+    if (changes.length) modified.push({ source: cur, changes });
+    else unchanged.push(cur);
+  }
+  for (const [id, v] of vMap) {
+    if (!cMap.has(id)) removed.push(v);
+  }
+  return { added, removed, modified, unchanged };
+}
+
+function renderVersionDiff(diff, versionNum, publishedAt) {
+  const { added, removed, modified, unchanged } = diff;
+  const total = added.length + removed.length + modified.length + unchanged.length;
+
+  const badge = (label, count, color) => count
+    ? `<span class="diff-badge" style="background:${color}">${count} ${label}</span>`
+    : '';
+
+  let html = `
+    <div class="diff-panel">
+      <div class="diff-header">
+        <span class="diff-title">v${versionNum} <span class="diff-ts">${new Date(publishedAt).toLocaleString()}</span> vs. <em>current</em></span>
+        <span class="diff-summary">
+          ${badge('added', added.length, 'rgba(34,197,94,0.2)')}
+          ${badge('removed', removed.length, 'rgba(239,68,68,0.2)')}
+          ${badge('changed', modified.length, 'rgba(234,179,8,0.2)')}
+          ${!added.length && !removed.length && !modified.length ? '<span class="diff-badge" style="background:rgba(148,163,184,0.2)">identical</span>' : ''}
+        </span>
+      </div>`;
+
+  if (added.length) {
+    html += `<div class="diff-group diff-added"><div class="diff-group-label">Added since this version (${added.length})</div>`;
+    for (const s of added) html += `<div class="diff-row diff-row-added"><span class="diff-source-name">${escHtml(s.name)}</span> <span class="diff-type">${s.dataType}</span></div>`;
+    html += `</div>`;
+  }
+  if (removed.length) {
+    html += `<div class="diff-group diff-removed"><div class="diff-group-label">Removed since this version (${removed.length})</div>`;
+    for (const s of removed) html += `<div class="diff-row diff-row-removed"><span class="diff-source-name">${escHtml(s.name)}</span> <span class="diff-type">${s.dataType}</span></div>`;
+    html += `</div>`;
+  }
+  if (modified.length) {
+    html += `<div class="diff-group diff-modified"><div class="diff-group-label">Modified since this version (${modified.length})</div>`;
+    for (const { source, changes } of modified) {
+      html += `<details class="diff-source-block"><summary class="diff-row diff-row-modified"><span class="diff-source-name">${escHtml(source.name)}</span> <span class="diff-type">${source.dataType}</span> <span class="diff-change-count">${changes.length} change${changes.length !== 1 ? 's' : ''}</span></summary>
+        <table class="diff-fields-table">`;
+      for (const { key, from, to } of changes) {
+        const label = DIFF_FIELDS.find(([k]) => k === key)?.[1] || key;
+        html += `<tr>
+          <td class="diff-field-name">${escHtml(label)}</td>
+          <td class="diff-field-from">${escHtml(fieldLabel(key, from))}</td>
+          <td class="diff-arrow">→</td>
+          <td class="diff-field-to">${escHtml(fieldLabel(key, to))}</td>
+        </tr>`;
+      }
+      html += `</table></details>`;
+    }
+    html += `</div>`;
+  }
+  if (unchanged.length && (added.length || removed.length || modified.length)) {
+    html += `<div class="diff-group"><div class="diff-group-label diff-unchanged-label">${unchanged.length} source${unchanged.length !== 1 ? 's' : ''} unchanged</div></div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
 async function previewVersion(version) {
+  const existing = document.getElementById('version-preview');
+  if (existing) existing.remove();
+
+  const preview = document.createElement('div');
+  preview.id = 'version-preview';
+  preview.innerHTML = `<div class="diff-panel" style="justify-content:center;padding:24px;"><span style="color:var(--text-muted)">Loading diff…</span></div>`;
+  document.getElementById('modal-content').appendChild(preview);
+
   try {
     const res = await fetch(`${API}/config/versions/${version}`);
     const data = await res.json();
-
-    let html = `<div style="margin-top: 16px;"><h4>Version ${data.version} - ${new Date(data.publishedAt).toLocaleString()}</h4>`;
-    html += `<div style="max-height: 300px; overflow-y: auto;">`;
-    if (data.sources && data.sources.length > 0) {
-      html += `<ul style="margin: 0; padding-left: 16px;">`;
-      data.sources.forEach(s => {
-        html += `<li>${escHtml(s.name)} <span style="color: var(--text-muted); font-size: 11px;">(${s.dataType})</span></li>`;
-      });
-      html += `</ul>`;
-    } else {
-      html += `<span style="color: var(--text-muted);">No sources</span>`;
-    }
-    html += `</div></div>`;
-
-    const existing = document.getElementById('version-preview');
-    if (existing) existing.remove();
-
-    const preview = document.createElement('div');
-    preview.id = 'version-preview';
-    preview.innerHTML = html;
-    document.getElementById('modal-content').appendChild(preview);
+    const diff = computeVersionDiff(data.sources || [], state.sources);
+    preview.innerHTML = renderVersionDiff(diff, data.version, data.publishedAt);
   } catch (err) {
-    alert('Failed to preview version: ' + err.message);
+    preview.innerHTML = `<div class="diff-panel"><span style="color:var(--danger)">Failed to load diff: ${escHtml(err.message)}</span></div>`;
   }
 }
 
