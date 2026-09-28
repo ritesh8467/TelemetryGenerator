@@ -543,6 +543,48 @@ header h1 { font-size: 15px; font-weight: 600; line-height: 1.2; }
   gap: 12px;
 }
 
+.form-row-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.form-override-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(88,166,255,0.08);
+  border: 1px solid rgba(88,166,255,0.25);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.form-override-icon {
+  margin-right: 6px;
+  color: var(--primary);
+}
+.form-override-values {
+  font-size: 11px;
+  color: var(--primary);
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.override-badge {
+  display: inline-block;
+  background: rgba(88,166,255,0.15);
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
 .form-actions {
   display: flex;
   gap: 12px;

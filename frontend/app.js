@@ -533,8 +533,12 @@ async function showSourceDetail(id) {
         <tr><td>Data Type</td><td>${escHtml(source.dataType)}</td></tr>
         <tr><td>Sub Type</td><td>${escHtml(source.subType)}</td></tr>
         <tr><td>Format</td><td>${escHtml(source.format)}</td></tr>
-        <tr><td>Interval</td><td>${parseInt(source.intervalSeconds) || 0} seconds</td></tr>
-        <tr><td>Volume</td><td>${parseInt(source.volumePerInterval) || 0} records/request</td></tr>
+        <tr><td>Interval</td><td>${state.settings.overrideEnabled
+          ? `<span style="color:var(--text-muted)">${state.settings.globalIntervalSeconds}s <span class="override-badge">global</span></span>`
+          : `${parseInt(source.intervalSeconds) || 0} seconds`}</td></tr>
+        <tr><td>Volume</td><td>${state.settings.overrideEnabled
+          ? `<span style="color:var(--text-muted)">${state.settings.globalVolumePerInterval} records/request <span class="override-badge">global</span></span>`
+          : `${parseInt(source.volumePerInterval) || 0} records/request`}</td></tr>
         <tr><td>Last Sent</td><td>${source.stats?.lastSentAt ? escHtml(source.stats.lastSentAt) : 'Never'}</td></tr>
       </table>
     </div>
@@ -691,6 +695,22 @@ function renderForm(source) {
         </div>
       </div>
 
+      ${state.settings.overrideEnabled ? `
+      <div class="form-override-notice">
+        <span class="form-override-icon">⚙</span>
+        Global override is enforced — interval and volume are controlled by Settings and cannot be edited per source.
+        <span class="form-override-values">Effective: ${state.settings.globalIntervalSeconds}s interval · ${state.settings.globalVolumePerInterval} records/request</span>
+      </div>
+      <div class="form-row form-row-disabled">
+        <div class="form-group">
+          <label>Interval (seconds)</label>
+          <input type="number" name="intervalSeconds" value="${source?.intervalSeconds || 10}" min="1" max="3600" disabled readonly>
+        </div>
+        <div class="form-group">
+          <label>Volume (records/request)</label>
+          <input type="number" name="volumePerInterval" value="${source?.volumePerInterval || 50}" min="1" max="10000" disabled readonly>
+        </div>
+      </div>` : `
       <div class="form-row">
         <div class="form-group">
           <label>Interval (seconds)</label>
@@ -700,7 +720,7 @@ function renderForm(source) {
           <label>Volume (records/request)</label>
           <input type="number" name="volumePerInterval" value="${source?.volumePerInterval || 50}" min="1" max="10000">
         </div>
-      </div>
+      </div>`}
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary">${isEdit ? 'Save to Draft' : 'Add to Draft'}</button>
