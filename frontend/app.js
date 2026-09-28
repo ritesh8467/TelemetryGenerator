@@ -488,7 +488,7 @@ async function showErrorLogs(id) {
       return;
     }
 
-    container.innerHTML = data.errors.map(entry => `
+    container.innerHTML = [...data.errors].reverse().map(entry => `
       <div class="error-log-entry">
         <div class="error-log-header">
           <span class="error-log-time">${new Date(entry.timestamp).toLocaleTimeString()}</span>
