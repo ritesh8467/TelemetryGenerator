@@ -144,6 +144,7 @@ let config = { sources: [] };
 let flushTimer = null;
 
 export function load() {
+  mkdirSync(join(__dirname, '..', 'data'), { recursive: true });
   if (existsSync(CONFIG_PATH)) {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
     config = JSON.parse(raw);

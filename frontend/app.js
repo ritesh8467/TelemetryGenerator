@@ -375,15 +375,17 @@ function render() {
               const epHealth = (source.health?.endpoints || []).find(h => h.label === ep.label || h.url === ep.url);
               const isEnabled = ep.enabled !== false;
               let healthDot = '';
-              if (epHealth) {
-                const cls = epHealth.status === 'green' ? 'green' : 'red';
-                const title = epHealth.error ? escHtml(epHealth.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
-                healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
-              } else if (isEnabled && source.active) {
-                const hs = source.health?.status;
-                const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
-                const title = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
-                if (cls) healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
+              if (isEnabled) {
+                if (epHealth) {
+                  const cls = epHealth.status === 'green' ? 'green' : 'red';
+                  const title = epHealth.error ? escHtml(epHealth.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
+                  healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
+                } else if (source.active) {
+                  const hs = source.health?.status;
+                  const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                  const title = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
+                  if (cls) healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
+                }
               }
               const label = escHtml(ep.label || 'EP' + (i + 1));
               const checked = isEnabled ? 'checked' : '';
@@ -399,17 +401,19 @@ function render() {
               const foEnabled = fo.enabled !== false;
               const fh = (source.health?.endpoints || []).find(e => e.label === (fo.label || 'File') || e.url === fo.path);
               let fhDot = '';
-              if (!fo.path) {
-                fhDot = '<span class="toggle-health red" title="No file path configured"></span>';
-              } else if (fh) {
-                const cls = fh.status === 'green' ? 'green' : 'red';
-                const ftitle = fh.error ? escHtml(fh.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
-                fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
-              } else if (foEnabled && source.active) {
-                const hs = source.health?.status;
-                const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
-                const ftitle = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
-                if (cls) fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
+              if (foEnabled) {
+                if (!fo.path) {
+                  fhDot = '<span class="toggle-health red" title="No file path configured"></span>';
+                } else if (fh) {
+                  const cls = fh.status === 'green' ? 'green' : 'red';
+                  const ftitle = fh.error ? escHtml(fh.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
+                  fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
+                } else if (source.active) {
+                  const hs = source.health?.status;
+                  const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                  const ftitle = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
+                  if (cls) fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
+                }
               }
               const baseName = fo.path ? (fo.path.split('/').pop() || fo.path) : '';
               const displayName = escHtml(fo.label || baseName || ('File ' + (i + 1)));
