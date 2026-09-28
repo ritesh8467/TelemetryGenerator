@@ -4,13 +4,18 @@ export async function send(records, endpointUrl, format, metadata = {}) {
 
   switch (format) {
     case 'json':
-      body = JSON.stringify(records.map(r => ({
-        timestamp: new Date().toISOString(),
-        message: r,
-        sourceCategory: metadata.sourceCategory || '',
-        sourceHost: metadata.sourceHost || '',
-        source: 'telemetry-generator'
-      })));
+      body = records.map(r => {
+        try {
+          JSON.parse(r);
+          return r;
+        } catch {
+          return JSON.stringify({
+            timestamp: new Date().toISOString(),
+            message: r,
+            source: 'telemetry-generator'
+          });
+        }
+      }).join('\n');
       contentType = 'application/json';
       break;
     case 'syslog':
@@ -40,12 +45,14 @@ export async function send(records, endpointUrl, format, metadata = {}) {
       signal: AbortSignal.timeout(10000)
     });
 
+    const bytes = response.ok ? Buffer.byteLength(body, 'utf-8') : 0;
     return {
       ok: response.ok,
       status: response.status,
-      body: response.ok ? '' : await response.text()
+      body: response.ok ? '' : await response.text(),
+      bytes
     };
   } catch (err) {
-    return { ok: false, status: 0, body: err.name === 'TimeoutError' ? 'Request timed out (10s)' : err.message };
+    return { ok: false, status: 0, body: err.name === 'TimeoutError' ? 'Request timed out (10s)' : err.message, bytes: 0 };
   }
 }

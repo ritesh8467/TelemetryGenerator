@@ -18,9 +18,11 @@ A comprehensive telemetry data generator for testing and development. Generate r
   - Per-endpoint enable/disable for HTTP destinations
   - Real-time health indicators (green/red status for each export mode)
   - Configurable interval and volume per source
-  - Start All / Stop All bulk operations
+  - Start All / Stop All bulk operations (preserves per-endpoint enabled states)
   - View recent telemetry samples
   - Source duplication and deletion
+  - **Settings tab:** configure app name, timezone (applied to log timestamps), and version history limit
+  - **Collapsible left sidebar** for navigating between Telemetry and Settings views
 
 ## Prerequisites
 
@@ -32,8 +34,9 @@ A comprehensive telemetry data generator for testing and development. Generate r
 ```bash
 cd TelemetryGenerator
 npm install
-cd backend && npm install
 ```
+
+> A single `npm install` installs both root and backend dependencies automatically.
 
 ## Usage
 
@@ -99,6 +102,11 @@ The application will be available at `http://localhost:3000`
 - `POST /api/sources/start-all` - Start all sources
 - `POST /api/sources/stop-all` - Stop all sources
 
+### Settings
+
+- `GET /api/settings` - Get app settings (appName, timezone, maxVersions)
+- `PUT /api/settings` - Update settings (partial update supported)
+
 ### Statistics
 
 - `GET /api/stats` - Get aggregate statistics
@@ -111,26 +119,31 @@ TelemetryGenerator/
 │   ├── package.json
 │   ├── src/
 │   │   ├── server.js              # Express server entry point
-│   │   ├── config.js              # Config persistence
+│   │   ├── config.js              # Config persistence (draft/publish/versions)
+│   │   ├── settings.js            # App settings persistence (appName, timezone, maxVersions)
 │   │   ├── sourceManager.js       # Worker lifecycle management
 │   │   ├── routes/
 │   │   │   ├── sources.js         # Source CRUD routes
+│   │   │   ├── settings.js        # GET/PUT /api/settings
 │   │   │   └── stats.js           # Statistics routes
 │   │   ├── workers/
 │   │   │   └── sourceWorker.js    # Tick loop for data generation
 │   │   ├── generators/
-│   │   │   ├── logs/              # Log generators
+│   │   │   ├── logs/              # Log generators (timezone-aware)
 │   │   │   ├── metrics/           # Metric generators
 │   │   │   └── traces/            # Trace generators
+│   │   ├── utils/
+│   │   │   └── time.js            # Timezone-aware timestamp formatters
 │   │   └── senders/
 │   │       ├── logSender.js       # HTTP log sender
 │   │       ├── metricSender.js    # HTTP metric sender
 │   │       ├── traceSender.js     # HTTP trace sender
 │   │       └── fileSender.js      # File sender with rotation
 │   └── data/
-│       └── config.json            # Persisted source configs
+│       ├── config.json            # Persisted source configs
+│       └── settings.json          # Persisted app settings
 ├── frontend/
-│   ├── index.html
+│   ├── index.html                 # App shell with collapsible sidebar + two-tab layout
 │   ├── app.js                     # SPA logic
 │   └── styles.css                 # Dark theme styles
 └── package.json

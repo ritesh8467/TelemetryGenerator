@@ -87,8 +87,9 @@ export async function send(records, filePath, dataType, format) {
 
     const body = formatBody(records, dataType, format);
     appendFileSync(filePath, body);
+    const bytes = Buffer.byteLength(body, 'utf-8');
 
-    return { ok: true, status: 200, body: '' };
+    return { ok: true, status: 200, body: '', bytes };
   } catch (err) {
     let errorMsg = err.message;
     if (err.code === 'EACCES') {
@@ -96,6 +97,6 @@ export async function send(records, filePath, dataType, format) {
     } else if (err.code === 'ENOENT') {
       errorMsg = `Directory not found: ${dirname(filePath)}. Create parent directory or use /tmp/`;
     }
-    return { ok: false, status: 0, body: errorMsg };
+    return { ok: false, status: 0, body: errorMsg, bytes: 0 };
   }
 }

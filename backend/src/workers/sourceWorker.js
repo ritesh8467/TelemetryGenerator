@@ -1,4 +1,5 @@
 import * as config from '../config.js';
+import { get as getSettings } from '../settings.js';
 import { getGenerator } from '../generators/index.js';
 import { getSender, getFileSender } from '../senders/index.js';
 
@@ -38,8 +39,10 @@ function storeRecent(sourceId, records, dataType) {
 
   let newEntries;
   if (dataType === 'traces') {
-    const spans = records.resourceSpans || [];
-    newEntries = spans.slice(0, MAX_RECENT).map(rs => ({
+    const allResourceSpans = Array.isArray(records)
+      ? records.flatMap(t => t.resourceSpans || [])
+      : (records.resourceSpans || []);
+    newEntries = allResourceSpans.slice(0, MAX_RECENT).map(rs => ({
       timestamp,
       data: JSON.stringify(rs.scopeSpans?.[0]?.spans?.[0] || rs, null, 2).substring(0, 500)
     }));
@@ -66,7 +69,7 @@ export function createWorker(source) {
           return;
         }
 
-        const records = generator.generate(source.volumePerInterval, source.metadata || {});
+        const records = generator.generate(source.volumePerInterval, { ...(source.metadata || {}), timezone: getSettings().timezone });
         const sender = getSender(source.dataType);
         if (!sender) {
           console.error(`No sender for ${source.dataType}`);
@@ -77,10 +80,15 @@ export function createWorker(source) {
 
         const currentSource = config.getOne(source.id);
 
+        // Respect real-time source-level toggle: if the source was disabled
+        // after this worker started, skip sending without stopping the interval.
+        if (currentSource && currentSource.enabled === false) return;
+
         const now = new Date().toISOString();
         const allEpHealth = [];
         let successCount = 0;
         let failCount = 0;
+        let bytesThisTick = 0;
 
         // File export — iterate fileOutputs array
         const fileOutputs = (currentSource?.fileOutputs || source.fileOutputs || []).filter(f => f.enabled !== false);
@@ -97,6 +105,7 @@ export function createWorker(source) {
             const result = await fileSenderModule.send(records, fileOut.path, source.dataType, source.format);
             if (result.ok) {
               successCount++;
+              bytesThisTick += result.bytes || 0;
               allEpHealth.push({ url: fileOut.path, label, status: 'green', error: null, lastCheck: now });
             } else {
               failCount++;
@@ -111,7 +120,7 @@ export function createWorker(source) {
 
         // HTTP export — gate only on individual endpoint enabled flags, not httpEnabled master
         {
-          const endpoints = (currentSource?.endpointUrls || source.endpointUrls || []).filter(ep => ep.enabled !== false);
+          const endpoints = (currentSource?.endpointUrls || source.endpointUrls || []).filter(ep => ep.enabled !== false && ep.url);
           if (endpoints.length > 0) {
             const results = await Promise.allSettled(
               endpoints.map(ep => sender.send(records, ep.url, source.format, source.metadata))
@@ -121,6 +130,7 @@ export function createWorker(source) {
               const result = results[i];
               if (result.status === 'fulfilled' && result.value.ok) {
                 successCount++;
+                bytesThisTick += result.value.bytes || 0;
                 allEpHealth.push({ url: ep.url, label: ep.label, status: 'green', error: null, lastCheck: now });
               } else {
                 failCount++;
@@ -178,10 +188,19 @@ export function createWorker(source) {
 
         if (currentSource) {
           const prevStats = currentSource.stats || {};
+          const allResourceSpans = Array.isArray(records)
+            ? records.flatMap(r => r.resourceSpans || [])
+            : (records.resourceSpans || []);
+          const spansThisTick = source.dataType === 'traces' && successCount > 0
+            ? allResourceSpans.reduce((acc, rs) =>
+                acc + (rs.scopeSpans || []).reduce((a, ss) => a + (ss.spans?.length || 0), 0), 0) * successCount
+            : 0;
           config.updateStats(source.id, {
             messagesSent: (prevStats.messagesSent || 0) + (source.volumePerInterval * successCount),
             errors: (prevStats.errors || 0) + failCount,
-            lastSentAt: successCount > 0 ? now : (prevStats.lastSentAt || null)
+            lastSentAt: successCount > 0 ? now : (prevStats.lastSentAt || null),
+            bytesSent: (prevStats.bytesSent || 0) + bytesThisTick,
+            spansSent: (prevStats.spansSent || 0) + spansThisTick
           });
         }
       } catch (err) {

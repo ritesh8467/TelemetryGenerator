@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Quick Start
 
 ```bash
-# Install dependencies (root and backend)
-npm install && cd backend && npm install
+# Install dependencies (root and backend in one step)
+npm install
 
 # Run development server (with auto-reload on file changes)
 npm run dev
@@ -25,9 +25,10 @@ npm start
 
 **Frontend (SPA):**
 - Vanilla JavaScript with no frameworks
+- Two-tab layout: **Telemetry** (source grid) and **Settings** (app config), switched via collapsible left sidebar
 - Single modal reused for all views (add/edit/detail modals)
 - Polling-based state sync every 5 seconds (GET `/api/sources`, `/api/stats`, `/api/config/status`)
-- State object: `{ sources: [], filter: 'all', hasDraft, draftChanges, draftSavedAt }`
+- State object: `{ sources: [], filter: 'all', hasDraft, draftChanges, draftSavedAt, activeTab, settings }`
 
 **Backend (Express):**
 - In-memory worker pool (`sourceManager.js`) manages tick loops for each active source
@@ -43,8 +44,10 @@ npm start
 ### Key Design Decisions
 
 - **Draft/Published split:** Edits don't go live until explicitly published. Allows safe iteration without disrupting active telemetry.
-- **Version history:** Last 10 published snapshots stored in `backend/data/versions/` for rollback.
+- **Version history:** Configurable number of published snapshots stored in `backend/data/versions/` for rollback (default 10, max 100; set in Settings tab).
 - **Single-file backup:** `flushNow()` creates `config.json.backup` before writes (safety net).
+- **Settings persistence:** App name, timezone, and max versions stored in `backend/data/settings.json`; loaded before config on startup.
+- **Timezone-aware timestamps:** Log generators (apache, microservice) use `Intl.DateTimeFormat` to emit timestamps in the configured IANA timezone.
 - **No database:** Config is JSON files on disk; no external dependencies.
 
 ## Config Safety Rule
@@ -66,8 +69,8 @@ npm start
   - Form rendering uses template literals; fields sync to draft on save
   - Modal pattern: set innerHTML of `#modal-content`, call `openModal()`, listen for form submit
 
-- **`frontend/styles.css`** – CSS variables for theming; BEM-like naming; toggle/tab patterns
-- **`frontend/index.html`** – minimal shell; toolbar, grid, modal overlay
+- **`frontend/styles.css`** – CSS variables for theming; BEM-like naming; toggle/tab patterns; sidebar collapse transition
+- **`frontend/index.html`** – `.app-shell` flex layout with `.app-sidebar` (collapsible, 220px↔52px) and `.app-main` containing two `.app-tab` divs (`#tab-telemetry`, `#tab-settings`); modal overlay at document level
 
 ### Backend
 
@@ -79,11 +82,24 @@ npm start
   - `getVersions()` / `getVersion(n)` / `restoreVersion(n)` – version management
   - All date/time values are ISO 8601 strings; comparison uses `new Date()` parsing
 
-- **`backend/src/routes/config.js`** (new file)
+- **`backend/src/settings.js`** – settings persistence module (leaf module, no imports from config.js)
+  - `load()` – reads `settings.json`, merges with defaults `{ appName, timezone: 'UTC', maxVersions: 10 }`, creates if absent
+  - `get()` – returns copy of current in-memory settings
+  - `save(updates)` – validates (timezone via `Intl`, maxVersions 1–100), writes to disk, returns updated
+
+- **`backend/src/utils/time.js`** – timezone-aware timestamp formatters using `Intl.DateTimeFormat`
+  - `formatISOInZone(date, timezone)` – ISO-8601 with correct offset (e.g. `2026-09-28T03:45:11-04:00`)
+  - `formatApacheTimestamp(date, timezone)` – Apache log format (e.g. `28/Sep/2026:03:45:11 -0400`)
+
+- **`backend/src/routes/config.js`**
   - GET `/status` – returns `{hasDraft, draftChanges, draftSavedAt, publishedCount, currentVersion}`
   - POST `/publish` – calls `stopAll()` → `config.publish()` → `startAll()`
-  - GET `/versions` – lists last 10 published snapshots
+  - GET `/versions` – lists published snapshots
   - POST `/versions/:n/restore` – restores old version, saves current as new version first
+
+- **`backend/src/routes/settings.js`**
+  - GET `/` – returns current settings `{appName, timezone, maxVersions}`
+  - PUT `/` – validates and saves settings, returns updated values
 
 - **`backend/src/routes/sources.js`**
   - CRUD routes (POST, PUT, DELETE) operate on draft; if no draft exists, snapshot published first
@@ -134,19 +150,23 @@ npm start
 
 ## API Endpoint Changes (Draft/Publish)
 
-**New endpoints:**
+**Settings endpoints:**
+- GET `/api/settings` – returns `{appName, timezone, maxVersions}`
+- PUT `/api/settings` – partial update; validates timezone (IANA) and maxVersions (1–100)
+
+**Config/version endpoints:**
 - GET `/api/config/status` – draft/published status
 - DELETE `/api/config/draft` – discard pending changes
 - POST `/api/config/publish` – apply draft to published
-- GET `/api/config/versions` – list 10 previous versions
+- GET `/api/config/versions` – list published snapshots (count = maxVersions setting)
 - GET `/api/config/versions/:n` – inspect specific version
 - POST `/api/config/versions/:n/restore` – revert to old version
 
-**Modified endpoints:**
+**Source endpoints:**
 - GET `/api/sources` – returns draft if exists, else published
 - POST `/api/sources`, PUT `/api/sources/:id`, DELETE `/api/sources/:id` – write to draft
 - POST `/api/sources/:id/toggle-http`, `toggle-file` – write to published + sync to draft
-- POST `/api/sources/start-all`, `stop-all` – no draft involvement
+- POST `/api/sources/start-all`, `stop-all` – controls workers only (does NOT modify source/endpoint enabled states)
 
 ## Common Development Tasks
 
@@ -205,4 +225,4 @@ User should be informed if they accidentally commit config. Backups can be recov
 - Frontend polls every 5 seconds (configurable in `app.js`)
 - Worker tick intervals per source (configurable: 5-3600 seconds)
 - Recent logs/error logs trimmed to prevent memory bloat (50/20 max entries per source)
-- Version history limited to 10 files (oldest auto-deleted on publish)
+- Version history limited to `maxVersions` (default 10, configurable 1–100 in Settings; oldest auto-deleted on publish)

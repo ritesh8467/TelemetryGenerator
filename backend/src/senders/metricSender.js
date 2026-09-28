@@ -60,13 +60,15 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
       signal: AbortSignal.timeout(10000)
     });
 
+    const bytes = response.ok ? Buffer.byteLength(body, 'utf-8') : 0;
     return {
       ok: response.ok,
       status: response.status,
-      body: response.ok ? '' : await response.text()
+      body: response.ok ? '' : await response.text(),
+      bytes
     };
   } catch (err) {
-    return { ok: false, status: 0, body: err.name === 'TimeoutError' ? 'Request timed out (10s)' : err.message };
+    return { ok: false, status: 0, body: err.name === 'TimeoutError' ? 'Request timed out (10s)' : err.message, bytes: 0 };
   }
 }
 

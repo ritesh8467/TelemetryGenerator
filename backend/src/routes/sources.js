@@ -2,9 +2,23 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import * as config from '../config.js';
 import { start, stop, startAll, stopAll, isActive } from '../sourceManager.js';
-import { getRecentLogs, getErrorLogs, getHealthStatus } from '../workers/sourceWorker.js';
+import { getRecentLogs, getErrorLogs, getHealthStatus, clearRecentLogs, clearErrorLogs, clearHealthStatus } from '../workers/sourceWorker.js';
 
 export const sourceRouter = Router();
+
+function sanitizeInterval(val) {
+  const n = parseInt(val, 10);
+  if (isNaN(n) || n < 1) return 5;
+  if (n > 86400) return 86400;
+  return n;
+}
+
+function sanitizeVolume(val) {
+  const n = parseInt(val, 10);
+  if (isNaN(n) || n < 1) return 1;
+  if (n > 10000) return 10000;
+  return n;
+}
 
 function normalizeEndpoints(body) {
   if (Array.isArray(body.endpointUrls) && body.endpointUrls.length > 0) {
@@ -28,10 +42,8 @@ sourceRouter.get('/', (req, res) => {
     if (!s.fileOutputs) {
       s = { ...s, fileOutputs: s.filePath ? [{ path: s.filePath, label: 'File', enabled: !!s.fileEnabled }] : [] };
     }
-    const anyEpEnabled = (s.endpointUrls || []).some(ep => ep.enabled !== false);
-    const anyFileEnabled = (s.fileOutputs || []).some(f => f.enabled !== false);
-    const active = isActive(s.id) || anyEpEnabled || anyFileEnabled;
     const rawHealth = getHealthStatus(s.id);
+    const active = s.enabled !== false;
     const health = rawHealth || (active ? { status: 'pending' } : null);
     const published_s = published.find(ps => ps.id === s.id);
     const draftOnly = !!draft && !published_s;
@@ -44,33 +56,50 @@ sourceRouter.get('/', (req, res) => {
 });
 
 sourceRouter.post('/stop-all', (req, res) => {
-  stopAll();
+  const sources = config.getAll();
+  for (const source of sources) {
+    source.enabled = false;
+    config.upsert(source);
+    stop(source.id);
+  }
   const draft = config.getDraft();
-  const baseSources = draft ? draft.sources : config.getAll();
-  const updated = baseSources.map(source => {
-    const fileOutputs = (source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: false }] : [])).map(f => ({ ...f, enabled: false }));
-    return { ...source, httpEnabled: false, fileEnabled: false, enabled: false, endpointUrls: (source.endpointUrls || []).map(ep => ({ ...ep, enabled: false })), fileOutputs };
-  });
-  config.saveDraft(updated);
-  res.json({ stopped: updated.length });
+  if (draft) {
+    for (const s of draft.sources) s.enabled = false;
+    config.saveDraft(draft.sources);
+  }
+  res.json({ stopped: true });
 });
 
 sourceRouter.post('/start-all', (req, res) => {
+  const sources = config.getAll();
+  for (const source of sources) {
+    source.enabled = true;
+    config.upsert(source);
+    start(source.id);
+  }
   const draft = config.getDraft();
-  const baseSources = draft ? draft.sources : config.getAll();
-  const updated = baseSources.map(source => {
-    const fileOutputs = (source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: true }] : [])).map(f => ({ ...f, enabled: true }));
-    return { ...source, httpEnabled: true, fileEnabled: fileOutputs.length > 0, enabled: true, endpointUrls: (source.endpointUrls || []).map(ep => ({ ...ep, enabled: true })), fileOutputs };
-  });
-  config.saveDraft(updated);
-  startAll();
-  res.json({ started: updated.length });
+  if (draft) {
+    for (const s of draft.sources) s.enabled = true;
+    config.saveDraft(draft.sources);
+  }
+  res.json({ started: true });
+});
+
+sourceRouter.post('/reset-all-stats', (req, res) => {
+  const sources = config.getAll();
+  for (const source of sources) {
+    config.resetStats(source.id);
+    clearRecentLogs(source.id);
+    clearErrorLogs(source.id);
+    clearHealthStatus(source.id);
+  }
+  res.json({ reset: true });
 });
 
 sourceRouter.get('/:id', (req, res) => {
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
-  res.json({ ...source, active: isActive(source.id) });
+  res.json({ ...source, active: source.enabled !== false });
 });
 
 sourceRouter.post('/', (req, res) => {
@@ -85,14 +114,14 @@ sourceRouter.post('/', (req, res) => {
     name: req.body.name || 'Untitled Source',
     httpEnabled,
     fileEnabled: fileOutputs.some(f => f.enabled !== false),
-    enabled: httpEnabled || fileOutputs.some(f => f.enabled !== false),
+    enabled: false,
     dataType: req.body.dataType,
     subType: req.body.subType,
     endpointUrls,
     fileOutputs,
     filePath: fileOutputs[0]?.path || '',
-    intervalSeconds: req.body.intervalSeconds || 10,
-    volumePerInterval: req.body.volumePerInterval || 50,
+    intervalSeconds: sanitizeInterval(req.body.intervalSeconds ?? 10),
+    volumePerInterval: sanitizeVolume(req.body.volumePerInterval ?? 50),
     format: req.body.format || 'text',
     metadata: req.body.metadata || {},
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
@@ -132,6 +161,13 @@ sourceRouter.put('/:id', (req, res) => {
     req.body.enabled = httpEnabled || fileEnabled;
   }
 
+  if (req.body.intervalSeconds !== undefined) {
+    req.body.intervalSeconds = sanitizeInterval(req.body.intervalSeconds);
+  }
+  if (req.body.volumePerInterval !== undefined) {
+    req.body.volumePerInterval = sanitizeVolume(req.body.volumePerInterval);
+  }
+
   const updated = { ...existing, ...req.body, id: existing.id, stats: existing.stats };
   draft.sources[idx] = updated;
   config.saveDraft(draft.sources);
@@ -154,6 +190,16 @@ sourceRouter.delete('/:id', (req, res) => {
   config.saveDraft(draft.sources);
 
   res.json({ deleted: true });
+});
+
+sourceRouter.post('/:id/reset-stats', (req, res) => {
+  const source = config.getOne(req.params.id);
+  if (!source) return res.status(404).json({ error: 'Source not found' });
+  config.resetStats(source.id);
+  clearRecentLogs(source.id);
+  clearErrorLogs(source.id);
+  clearHealthStatus(source.id);
+  res.json({ reset: true });
 });
 
 sourceRouter.get('/:id/recent', (req, res) => {
@@ -251,36 +297,30 @@ sourceRouter.post('/test-send', async (req, res) => {
 });
 
 sourceRouter.post('/:id/toggle', (req, res) => {
-  const draft = config.getDraft();
-  const baseSources = draft ? draft.sources : config.getAll();
-  const source = baseSources.find(s => s.id === req.params.id);
+  // Always update published so the worker picks up the change immediately.
+  const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
-  const anyEpEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-  const anyFileEnabled = (source.fileOutputs || []).some(f => f.enabled !== false);
-  const isCurrentlyActive = source.enabled !== false || anyEpEnabled || anyFileEnabled;
+  source.enabled = source.enabled === false ? true : false;
+  config.upsert(source);
 
-  if (isCurrentlyActive) {
-    source.httpEnabled = false;
-    source.fileEnabled = false;
-    source.enabled = false;
-    source.endpointUrls = (source.endpointUrls || []).map(ep => ({ ...ep, enabled: false }));
-    source.fileOutputs = (source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: false }] : [])).map(f => ({ ...f, enabled: false }));
-    stop(source.id);
-  } else {
-    const migratedFileOutputs = source.fileOutputs || (source.filePath ? [{ path: source.filePath, label: 'File', enabled: true }] : []);
-    source.httpEnabled = (source.endpointUrls || []).length > 0;
-    source.fileEnabled = migratedFileOutputs.length > 0;
-    source.enabled = true;
-    source.endpointUrls = (source.endpointUrls || []).map(ep => ({ ...ep, enabled: true }));
-    source.fileOutputs = migratedFileOutputs.map(f => ({ ...f, enabled: true }));
+  if (source.enabled) {
     start(source.id);
+  } else {
+    stop(source.id);
   }
 
-  const updatedSources = baseSources.map(s => s.id === source.id ? source : s);
-  config.saveDraft(updatedSources);
+  // Sync to draft if one exists so the UI stays consistent.
+  const draft = config.getDraft();
+  if (draft) {
+    const draftSource = draft.sources.find(s => s.id === req.params.id);
+    if (draftSource) {
+      draftSource.enabled = source.enabled;
+      config.saveDraft(draft.sources);
+    }
+  }
 
-  res.json({ ...source, active: isActive(source.id) });
+  res.json({ ...source, active: source.enabled !== false });
 });
 
 sourceRouter.post('/:id/toggle-http', (req, res) => {
@@ -291,7 +331,6 @@ sourceRouter.post('/:id/toggle-http', (req, res) => {
     if (!draftSource) return res.status(404).json({ error: 'Source not found' });
 
     draftSource.httpEnabled = !draftSource.httpEnabled;
-    draftSource.enabled = draftSource.httpEnabled || draftSource.fileEnabled;
     config.saveDraft(draft.sources);
 
     return res.json({ ...draftSource, active: isActive(draftSource.id) });
@@ -300,14 +339,8 @@ sourceRouter.post('/:id/toggle-http', (req, res) => {
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
-  const wasEnabled = source.enabled;
   source.httpEnabled = !source.httpEnabled;
-  source.enabled = source.httpEnabled || source.fileEnabled;
   config.upsert(source);
-
-  if (!wasEnabled && source.enabled) start(source.id);
-  else if (wasEnabled && !source.enabled) stop(source.id);
-  else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
 
   res.json({ ...source, active: isActive(source.id) });
 });
@@ -320,8 +353,6 @@ sourceRouter.post('/:id/toggle-file', (req, res) => {
     if (!draftSource) return res.status(404).json({ error: 'Source not found' });
 
     draftSource.fileEnabled = !draftSource.fileEnabled;
-    const anyEpEnabled = (draftSource.endpointUrls || []).some(ep => ep.enabled !== false);
-    draftSource.enabled = anyEpEnabled || draftSource.fileEnabled;
     config.saveDraft(draft.sources);
 
     return res.json({ ...draftSource, active: isActive(draftSource.id) });
@@ -330,15 +361,8 @@ sourceRouter.post('/:id/toggle-file', (req, res) => {
   const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
-  const wasEnabled = source.enabled;
   source.fileEnabled = !source.fileEnabled;
-  const anyEpEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-  source.enabled = anyEpEnabled || source.fileEnabled;
   config.upsert(source);
-
-  if (!wasEnabled && source.enabled) start(source.id);
-  else if (wasEnabled && !source.enabled) stop(source.id);
-  else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
 
   res.json({ ...source, active: isActive(source.id) });
 });
@@ -351,16 +375,17 @@ sourceRouter.post('/:id/toggle-endpoint/:index', (req, res) => {
   if (!source) return res.status(404).json({ error: 'Source not found' });
   if (!source.endpointUrls?.[epIndex]) return res.status(404).json({ error: 'Endpoint not found' });
 
-  const wasEnabled = source.enabled;
   source.endpointUrls[epIndex].enabled = !source.endpointUrls[epIndex].enabled;
-  const anyEnabled = source.endpointUrls.some(ep => ep.enabled !== false);
-  source.httpEnabled = anyEnabled;
-  source.enabled = anyEnabled || (source.fileOutputs || []).some(f => f.enabled !== false);
+  source.httpEnabled = source.endpointUrls.some(ep => ep.enabled !== false);
   config.upsert(source);
 
-  if (!wasEnabled && source.enabled) start(source.id);
-  else if (wasEnabled && !source.enabled) stop(source.id);
-  else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
+  // Restart worker so it picks up the updated endpoint list immediately.
+  if (source.enabled !== false && isActive(source.id)) {
+    stop(source.id);
+    start(source.id);
+  } else if (source.enabled !== false && !isActive(source.id)) {
+    start(source.id);
+  }
 
   // Sync the same change to the draft so the UI stays consistent.
   const draft = config.getDraft();
@@ -369,7 +394,6 @@ sourceRouter.post('/:id/toggle-endpoint/:index', (req, res) => {
     if (draftSource?.endpointUrls?.[epIndex] !== undefined) {
       draftSource.endpointUrls[epIndex].enabled = source.endpointUrls[epIndex].enabled;
       draftSource.httpEnabled = source.httpEnabled;
-      draftSource.enabled = source.enabled;
       config.saveDraft(draft.sources);
     }
   }
@@ -385,18 +409,18 @@ sourceRouter.post('/:id/toggle-file-output/:index', (req, res) => {
   if (!source) return res.status(404).json({ error: 'Source not found' });
   if (!source.fileOutputs?.[foIndex]) return res.status(404).json({ error: 'File output not found' });
 
-  const wasEnabled = source.enabled;
   source.fileOutputs[foIndex].enabled = !source.fileOutputs[foIndex].enabled;
-  const anyFileEnabled = source.fileOutputs.some(f => f.enabled !== false);
-  source.fileEnabled = anyFileEnabled;
-  const anyEpEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-  source.enabled = anyEpEnabled || anyFileEnabled;
+  source.fileEnabled = source.fileOutputs.some(f => f.enabled !== false);
   source.filePath = source.fileOutputs[0]?.path || '';
   config.upsert(source);
 
-  if (!wasEnabled && source.enabled) start(source.id);
-  else if (wasEnabled && !source.enabled) stop(source.id);
-  else if (wasEnabled && source.enabled) { stop(source.id); start(source.id); }
+  // Restart worker so it picks up the updated file output list immediately.
+  if (source.enabled !== false && isActive(source.id)) {
+    stop(source.id);
+    start(source.id);
+  } else if (source.enabled !== false && !isActive(source.id)) {
+    start(source.id);
+  }
 
   // Sync the same change to the draft so the UI stays consistent.
   const draft = config.getDraft();
@@ -405,7 +429,6 @@ sourceRouter.post('/:id/toggle-file-output/:index', (req, res) => {
     if (draftSource?.fileOutputs?.[foIndex] !== undefined) {
       draftSource.fileOutputs[foIndex].enabled = source.fileOutputs[foIndex].enabled;
       draftSource.fileEnabled = source.fileEnabled;
-      draftSource.enabled = source.enabled;
       draftSource.filePath = source.filePath;
       config.saveDraft(draft.sources);
     }

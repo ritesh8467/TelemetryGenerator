@@ -1,4 +1,7 @@
 import { faker } from '@faker-js/faker';
+import { formatISOInZone } from '../../utils/time.js';
+
+let _tz = 'UTC';
 
 const SERVICES = [
   { name: 'api-gateway', port: 8080 },
@@ -25,7 +28,7 @@ function traceCtx() {
 
 function base(service, level, component) {
   return {
-    '@timestamp': new Date().toISOString(),
+    '@timestamp': formatISOInZone(new Date(), _tz),
     level,
     service: service.name,
     component,
@@ -475,6 +478,7 @@ const LOG_GENERATORS = [
 ];
 
 export function generate(count, opts = {}) {
+  _tz = opts.timezone || 'UTC';
   const records = [];
   const totalWeight = LOG_GENERATORS.reduce((s, g) => s + g.weight, 0);
 

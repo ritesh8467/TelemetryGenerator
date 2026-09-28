@@ -28,9 +28,7 @@ export function isActive(sourceId) {
 export function startAll() {
   const sources = config.getAll();
   for (const source of sources) {
-    const anyEpEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-    const anyFileEnabled = (source.fileOutputs || []).some(f => f.enabled !== false);
-    if (source.enabled !== false || anyEpEnabled || anyFileEnabled) {
+    if (source.enabled !== false) {
       start(source.id);
     }
   }

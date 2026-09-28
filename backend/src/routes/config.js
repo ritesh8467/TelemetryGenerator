@@ -4,6 +4,16 @@ import { stopAll, startAll } from '../sourceManager.js';
 
 export const configRouter = Router();
 
+const OPERATIONAL_KEYS = new Set(['stats', 'enabled', 'httpEnabled', 'fileEnabled']);
+
+function stripOperational(source) {
+  const s = { ...source };
+  for (const k of OPERATIONAL_KEYS) delete s[k];
+  s.endpointUrls = (s.endpointUrls || []).map(({ enabled: _e, ...ep }) => ep);
+  s.fileOutputs = (s.fileOutputs || []).map(({ enabled: _e, ...fo }) => fo);
+  return s;
+}
+
 function countDraftChanges(draftSources, publishedSources) {
   const draftIds = new Set(draftSources.map(s => s.id));
   const publishedIds = new Set(publishedSources.map(s => s.id));
@@ -15,16 +25,9 @@ function countDraftChanges(draftSources, publishedSources) {
       changes++;
       continue;
     }
-
-    const d = draftSources.find(s => s.id === id);
-    const p = publishedSources.find(s => s.id === id);
-
-    for (const key in d) {
-      if (key !== 'stats' && JSON.stringify(d[key]) !== JSON.stringify(p[key])) {
-        changes++;
-        break;
-      }
-    }
+    const d = stripOperational(draftSources.find(s => s.id === id));
+    const p = stripOperational(publishedSources.find(s => s.id === id));
+    if (JSON.stringify(d) !== JSON.stringify(p)) changes++;
   }
 
   for (const id of publishedIds) {

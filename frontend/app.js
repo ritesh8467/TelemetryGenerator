@@ -1,5 +1,5 @@
 const API = '/api';
-let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null };
+let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null, activeTab: 'telemetry', settings: { appName: 'Telemetry Generator', timezone: 'UTC', maxVersions: 10 } };
 
 const SUB_TYPES = {
   logs: [
@@ -115,13 +115,36 @@ async function deleteSourceQuick(id, e) {
   await fetchSources();
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return (i === 0 ? val : val.toFixed(1)) + ' ' + units[i];
+}
+
 function toggleKebabMenu(id, e) {
   e.stopPropagation();
   const menu = document.getElementById(`kebab-menu-${id}`);
   document.querySelectorAll('.kebab-menu').forEach(m => {
-    if (m.id !== `kebab-menu-${id}`) m.classList.remove('active');
+    if (m.id !== `kebab-menu-${id}`) {
+      m.classList.remove('active');
+      m.closest('.source-card')?.classList.remove('menu-open');
+    }
   });
   menu.classList.toggle('active');
+  menu.closest('.source-card')?.classList.toggle('menu-open', menu.classList.contains('active'));
+}
+
+async function resetSourceStats(id, e) {
+  e.stopPropagation();
+  await fetch(`${API}/sources/${id}/reset-stats`, { method: 'POST' });
+  await fetchSources();
+}
+
+async function resetAllStats() {
+  await fetch(`${API}/sources/reset-all-stats`, { method: 'POST' });
+  await fetchSources();
 }
 
 async function saveSource(formData, id) {
@@ -169,7 +192,7 @@ function renderDraftIndicator() {
   const indicator = document.getElementById('draft-indicator');
   if (!indicator) return;
 
-  if (!state.hasDraft) {
+  if (!state.hasDraft || state.draftChanges === 0) {
     indicator.innerHTML = '';
     return;
   }
@@ -356,6 +379,7 @@ function render() {
             <div class="kebab-menu" id="kebab-menu-${source.id}">
               <button class="kebab-item" onclick="showSourceDetail('${source.id}'); event.stopPropagation();">View Details</button>
               <button class="kebab-item" onclick="showErrorLogs('${source.id}'); event.stopPropagation();">View Errors${(source.health?.status === 'red' || source.health?.status === 'mixed') ? ' <span class="kebab-error-badge">!</span>' : ''}</button>
+              <button class="kebab-item" onclick="resetSourceStats('${source.id}', event);">Reset Stats</button>
               <button class="kebab-item" onclick="duplicateSource('${source.id}'); event.stopPropagation();">Duplicate</button>
               <button class="kebab-item kebab-delete" onclick="deleteSourceQuick('${source.id}', event)">Delete</button>
             </div>
@@ -363,13 +387,15 @@ function render() {
         </div>
       </div>
       <div class="source-card-meta">
-        ${escHtml(source.subType)} &middot; ${source.format} &middot; every ${source.intervalSeconds}s &middot; ${source.volumePerInterval} records
+        ${escHtml(source.subType)} &middot; ${escHtml(source.format)} &middot; every ${parseInt(source.intervalSeconds) || 0}s &middot; ${parseInt(source.volumePerInterval) || 0} records
       </div>
       <div class="source-card-stats">
         <span>${runningStatus}</span>
         <span>${formatNumber(source.stats?.messagesSent || 0)} sent</span>
         <span>${source.stats?.errors || 0} errors</span>
         <span>${source.stats?.lastSentAt ? timeAgo(source.stats.lastSentAt) : 'Never sent'}</span>
+        ${source.dataType === 'logs' ? `<span>${formatBytes(source.stats?.bytesSent || 0)}</span>` : ''}
+        ${source.dataType === 'traces' ? `<span>${formatNumber(source.stats?.spansSent || 0)} spans</span>` : ''}
       </div>${healthHints}
       <div class="source-card-footer">
         <div class="export-toggles" onclick="event.stopPropagation()">
@@ -466,7 +492,7 @@ async function showErrorLogs(id) {
       <div class="error-log-entry">
         <div class="error-log-header">
           <span class="error-log-time">${new Date(entry.timestamp).toLocaleTimeString()}</span>
-          <span class="error-log-type" style="background: ${entry.type === 'HTTP' ? 'rgba(88,166,255,0.2)' : 'rgba(210,153,34,0.2)'}; color: ${entry.type === 'HTTP' ? 'var(--logs)' : 'var(--metrics)'};">${entry.type}</span>
+          <span class="error-log-type" style="background: ${entry.type === 'HTTP' ? 'rgba(88,166,255,0.2)' : 'rgba(210,153,34,0.2)'}; color: ${entry.type === 'HTTP' ? 'var(--logs)' : 'var(--metrics)'};">${escHtml(entry.type)}</span>
         </div>
         <div class="error-log-endpoint">${escHtml(entry.endpoint)}</div>
         <pre class="error-log-message">${escHtml(entry.error)}</pre>
@@ -494,7 +520,7 @@ async function showSourceDetail(id) {
         <div class="label">Errors</div>
       </div>
       <div class="stat-box">
-        <div class="value">${((source.httpEnabled !== false) || source.fileEnabled) ? '<span style="color:var(--success)">Running</span>' : 'Stopped'}</div>
+        <div class="value">${source.active ? '<span style="color:var(--success)">Running</span>' : 'Stopped'}</div>
         <div class="label">Status</div>
       </div>
     </div>
@@ -504,12 +530,12 @@ async function showSourceDetail(id) {
     </div>
     <div class="tab-panel" id="tab-config">
       <table class="config-table">
-        <tr><td>Data Type</td><td>${source.dataType}</td></tr>
-        <tr><td>Sub Type</td><td>${source.subType}</td></tr>
-        <tr><td>Format</td><td>${source.format}</td></tr>
-        <tr><td>Interval</td><td>${source.intervalSeconds} seconds</td></tr>
-        <tr><td>Volume</td><td>${source.volumePerInterval} records/request</td></tr>
-        <tr><td>Last Sent</td><td>${source.stats?.lastSentAt || 'Never'}</td></tr>
+        <tr><td>Data Type</td><td>${escHtml(source.dataType)}</td></tr>
+        <tr><td>Sub Type</td><td>${escHtml(source.subType)}</td></tr>
+        <tr><td>Format</td><td>${escHtml(source.format)}</td></tr>
+        <tr><td>Interval</td><td>${parseInt(source.intervalSeconds) || 0} seconds</td></tr>
+        <tr><td>Volume</td><td>${parseInt(source.volumePerInterval) || 0} records/request</td></tr>
+        <tr><td>Last Sent</td><td>${source.stats?.lastSentAt ? escHtml(source.stats.lastSentAt) : 'Never'}</td></tr>
       </table>
     </div>
     <div class="tab-panel hidden" id="tab-logs">
@@ -927,16 +953,150 @@ function renderTestResult(data) {
   resultDiv.innerHTML = html;
 }
 
-// Event listeners
+// ─── Settings & tab navigation ────────────────────────────────────────────────
+
+const TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Sao_Paulo',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Moscow',
+  'Africa/Lagos',
+  'Africa/Johannesburg',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Bangkok',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Asia/Seoul',
+  'Australia/Sydney',
+  'Pacific/Auckland'
+];
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.tab === tab);
+  });
+  document.querySelectorAll('.app-tab').forEach(el => {
+    el.classList.toggle('hidden', el.id !== `tab-${tab}`);
+  });
+  if (tab === 'settings') renderSettingsPage();
+}
+
+async function fetchSettings() {
+  try {
+    const res = await fetch(`${API}/settings`);
+    state.settings = await res.json();
+    applySettingsToUI();
+  } catch (err) {
+    console.error('Failed to fetch settings:', err);
+  }
+}
+
+async function saveSettings(updates) {
+  try {
+    const res = await fetch(`${API}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+    state.settings = await res.json();
+    applySettingsToUI();
+    return true;
+  } catch (err) {
+    alert('Failed to save settings: ' + err.message);
+    return false;
+  }
+}
+
+function applySettingsToUI() {
+  const name = state.settings.appName || 'Telemetry Generator';
+  document.title = name;
+  const titleEl = document.getElementById('app-title');
+  if (titleEl) titleEl.textContent = name;
+  const sidebarName = document.getElementById('sidebar-app-name');
+  if (sidebarName) sidebarName.textContent = name;
+}
+
+function renderSettingsPage() {
+  const s = state.settings;
+  const tzOptions = TIMEZONES.map(tz =>
+    `<option value="${tz}"${tz === s.timezone ? ' selected' : ''}>${tz}</option>`
+  ).join('');
+
+  document.getElementById('settings-content').innerHTML = `
+    <div class="settings-page">
+      <div class="settings-section">
+        <div class="settings-section-title">Application</div>
+        <div class="settings-row">
+          <label class="settings-label" for="setting-appname">Application Name</label>
+          <span class="settings-description">Displayed in the page title and sidebar.</span>
+          <input id="setting-appname" class="settings-input" type="text" value="${escHtml(s.appName || '')}" placeholder="Telemetry Generator" maxlength="80">
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">Timezone</div>
+        <div class="settings-row">
+          <label class="settings-label" for="setting-timezone">Timezone</label>
+          <span class="settings-description">Applied to timestamps in generated telemetry logs.</span>
+          <select id="setting-timezone" class="settings-input">${tzOptions}</select>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">Version History</div>
+        <div class="settings-row">
+          <label class="settings-label" for="setting-maxversions">Versions to Keep</label>
+          <span class="settings-description">Number of published snapshots retained. Oldest versions are deleted automatically on publish. (1–100)</span>
+          <input id="setting-maxversions" class="settings-input" type="number" min="1" max="100" value="${s.maxVersions || 10}">
+        </div>
+      </div>
+      <div class="settings-save-row">
+        <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+        <span class="settings-saved-indicator" id="settings-saved-indicator">Saved</span>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('btn-save-settings').addEventListener('click', async () => {
+    const appName = document.getElementById('setting-appname').value.trim();
+    const timezone = document.getElementById('setting-timezone').value;
+    const maxVersions = parseInt(document.getElementById('setting-maxversions').value, 10);
+    const ok = await saveSettings({ appName, timezone, maxVersions });
+    if (ok) {
+      const ind = document.getElementById('settings-saved-indicator');
+      if (ind) {
+        ind.classList.add('visible');
+        setTimeout(() => ind.classList.remove('visible'), 2000);
+      }
+    }
+  });
+}
+
+// ─── Event listeners ──────────────────────────────────────────────────────────
+
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.kebab-menu-container')) {
-    document.querySelectorAll('.kebab-menu').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll('.kebab-menu').forEach(m => {
+      m.classList.remove('active');
+      m.closest('.source-card')?.classList.remove('menu-open');
+    });
   }
 });
 
 document.getElementById('btn-add-source').addEventListener('click', showAddForm);
 document.getElementById('btn-test-send').addEventListener('click', showTestSend);
 document.getElementById('btn-versions').addEventListener('click', showVersionHistory);
+document.getElementById('btn-reset-all-stats').addEventListener('click', resetAllStats);
 document.getElementById('btn-start-all').addEventListener('click', async () => {
   await fetch(`${API}/sources/start-all`, { method: 'POST' });
   await Promise.all([fetchSources(), fetchConfigStatus()]);
@@ -962,7 +1122,21 @@ document.querySelectorAll('.btn-filter').forEach(btn => {
   });
 });
 
+// Sidebar toggle
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+  document.getElementById('app-sidebar').classList.toggle('collapsed');
+});
+
+// Sidebar nav
+document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+  item.addEventListener('click', () => switchTab(item.dataset.tab));
+  item.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchTab(item.dataset.tab); }
+  });
+});
+
 // Initial load + polling
+fetchSettings();
 fetchSources();
 fetchStats();
 fetchConfigStatus();

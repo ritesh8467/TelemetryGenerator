@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync, unlin
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
+import { get as getSettings } from './settings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, '..', 'data', 'config.json');
@@ -293,6 +294,15 @@ export function discardDraft() {
   }
 }
 
+function stripEnabledState(source) {
+  const { enabled, httpEnabled, fileEnabled, ...rest } = source;
+  return {
+    ...rest,
+    endpointUrls: (rest.endpointUrls || []).map(({ enabled: _e, ...ep }) => ep),
+    fileOutputs: (rest.fileOutputs || []).map(({ enabled: _e, ...fo }) => fo)
+  };
+}
+
 function saveToVersionHistory() {
   try {
     mkdirSync(VERSIONS_DIR, { recursive: true });
@@ -311,14 +321,15 @@ function saveToVersionHistory() {
     writeFileSync(versionPath, JSON.stringify({
       version,
       publishedAt,
-      sources: config.sources
+      sources: config.sources.map(stripEnabledState)
     }, null, 2));
 
     versionIndex.versions.unshift({ version, publishedAt, filename, sourceCount: config.sources.length });
     versionIndex.nextVersion = version + 1;
     versionIndex.currentVersion = version;
 
-    if (versionIndex.versions.length > 10) {
+    const maxVersions = getSettings().maxVersions || 10;
+    if (versionIndex.versions.length > maxVersions) {
       const removed = versionIndex.versions.pop();
       try {
         unlinkSync(join(VERSIONS_DIR, removed.filename));
@@ -346,6 +357,38 @@ export function publish(draftSources) {
     console.error('Failed to publish:', err.message);
     return { success: false, error: err.message };
   }
+}
+
+export function pruneVersionHistory(maxVersions) {
+  try {
+    if (!existsSync(VERSIONS_INDEX)) return;
+    const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
+    const versionIndex = JSON.parse(raw);
+    let changed = false;
+    while (versionIndex.versions.length > maxVersions) {
+      const removed = versionIndex.versions.pop();
+      try { unlinkSync(join(VERSIONS_DIR, removed.filename)); } catch {}
+      changed = true;
+    }
+    if (changed) writeFileSync(VERSIONS_INDEX, JSON.stringify(versionIndex, null, 2));
+  } catch (err) {
+    console.error('Failed to prune version history:', err.message);
+  }
+}
+
+export function resetStats(id) {
+  const source = config.sources.find(s => s.id === id);
+  if (source) {
+    source.stats = { messagesSent: 0, errors: 0, lastSentAt: null, bytesSent: 0, spansSent: 0 };
+    scheduledFlush();
+  }
+}
+
+export function resetAllStats() {
+  for (const source of config.sources) {
+    source.stats = { messagesSent: 0, errors: 0, lastSentAt: null, bytesSent: 0, spansSent: 0 };
+  }
+  scheduledFlush();
 }
 
 export function getVersions() {
@@ -386,8 +429,37 @@ export function restoreVersion(versionNumber) {
     // Save current state as a new snapshot before overwriting
     saveToVersionHistory();
 
-    // Apply the restored sources
-    config.sources = version.sources;
+    // Build a map of current enabled states (source and endpoint level) keyed by source ID
+    const currentEnabledMap = new Map(config.sources.map(s => ({
+      id: s.id,
+      enabled: s.enabled !== false,
+      httpEnabled: s.httpEnabled !== false,
+      fileEnabled: s.fileEnabled !== false,
+      endpointUrls: s.endpointUrls || [],
+      fileOutputs: s.fileOutputs || []
+    })).map(s => [s.id, s]));
+
+    // Apply the restored sources, preserving enabled states from current config
+    config.sources = version.sources.map(vs => {
+      const cur = currentEnabledMap.get(vs.id);
+      const restoredEps = (vs.endpointUrls || []).map(ep => {
+        const match = cur ? (cur.endpointUrls || []).find(ce => ce.url === ep.url) : null;
+        return { ...ep, enabled: match ? match.enabled !== false : true };
+      });
+      const restoredFos = (vs.fileOutputs || []).map(fo => {
+        const match = cur ? (cur.fileOutputs || []).find(cf => cf.path === fo.path) : null;
+        return { ...fo, enabled: match ? match.enabled !== false : true };
+      });
+      return {
+        ...vs,
+        enabled: cur ? cur.enabled : false,
+        httpEnabled: cur ? cur.httpEnabled : false,
+        fileEnabled: cur ? cur.fileEnabled : false,
+        endpointUrls: restoredEps,
+        fileOutputs: restoredFos
+      };
+    });
+
     writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
     discardDraft();
 
