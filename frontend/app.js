@@ -60,16 +60,8 @@ async function fetchStats() {
 }
 
 async function fetchConfigStatus() {
-  try {
-    const res = await fetch(`${API}/config/status`);
-    const data = await res.json();
-    state.hasDraft = data.hasDraft;
-    state.draftChanges = data.draftChanges;
-    state.draftSavedAt = data.draftSavedAt;
-    renderStatusBar();
-  } catch (err) {
-    console.error('Failed to fetch config status:', err);
-  }
+  // Status bar removed — changes are saved immediately. Keep the call to
+  // stay compatible with poll loop but do nothing with the response.
 }
 
 async function toggleSource(id, e) {
@@ -166,7 +158,7 @@ async function saveSource(formData, id) {
     return;
   }
   closeModal();
-  await Promise.all([fetchSources(), fetchConfigStatus()]);
+  await fetchSources();
 }
 
 function renderAggregateStats(data) {
@@ -178,61 +170,7 @@ function renderAggregateStats(data) {
   `;
 }
 
-function renderStatusBar() {
-  const bar = document.getElementById('config-status-bar');
-  if (!state.hasDraft) {
-    bar.className = 'config-status-bar published';
-  } else {
-    bar.className = 'config-status-bar draft';
-  }
-  renderDraftIndicator();
-}
-
-function renderDraftIndicator() {
-  const indicator = document.getElementById('draft-indicator');
-  if (!indicator) return;
-
-  if (!state.hasDraft || state.draftChanges === 0) {
-    indicator.innerHTML = '';
-    return;
-  }
-
-  const timeAgoStr = state.draftSavedAt ? timeAgo(state.draftSavedAt) : 'just now';
-  indicator.innerHTML = `
-    <div class="draft-indicator-content">
-      <span class="draft-badge">⚠ Draft</span>
-      <span class="draft-info">${state.draftChanges} change${state.draftChanges !== 1 ? 's' : ''}</span>
-      <button class="btn btn-sm btn-primary" onclick="publishDraft()">Publish</button>
-      <button class="btn btn-sm btn-secondary" onclick="discardDraft()">Discard</button>
-    </div>
-  `;
-}
-
-async function publishDraft() {
-  try {
-    const res = await fetch(`${API}/config/publish`, { method: 'POST' });
-    const data = await res.json();
-    if (data.success) {
-      await fetchSources();
-      await fetchConfigStatus();
-    } else {
-      alert('Failed to publish: ' + (data.error || 'Unknown error'));
-    }
-  } catch (err) {
-    alert('Failed to publish: ' + err.message);
-  }
-}
-
-async function discardDraft() {
-  if (!confirm('Discard all pending changes?')) return;
-  try {
-    await fetch(`${API}/config/draft`, { method: 'DELETE' });
-    await fetchSources();
-    await fetchConfigStatus();
-  } catch (err) {
-    alert('Failed to discard draft: ' + err.message);
-  }
-}
+function renderStatusBar() { /* removed — changes save immediately */ }
 
 async function showVersionHistory() {
   document.getElementById('modal-content').innerHTML = `
@@ -259,22 +197,25 @@ async function showVersionHistory() {
     container.innerHTML = `<table class="versions-table" style="width:100%; border-collapse: collapse;">
       <tr style="border-bottom: 1px solid var(--border); font-weight: 500;">
         <td style="padding: 8px;">Version</td>
-        <td style="padding: 8px;">Published</td>
+        <td style="padding: 8px;">Saved</td>
         <td style="padding: 8px;">Sources</td>
         <td style="padding: 8px; text-align: right;">Actions</td>
       </tr>
       ${data.versions.map(v => {
         const isCurrent = v.version === current;
+        const isPinned = !!v.pinned;
         return `
         <tr style="border-bottom: 1px solid var(--border);${isCurrent ? ' background: var(--bg-hover, rgba(var(--accent-rgb,59,130,246),0.06));' : ''}">
           <td style="padding: 8px;">
             v${v.version}
             ${isCurrent ? '<span style="margin-left:6px;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:var(--success);color:#fff;">Current</span>' : ''}
+            ${isPinned ? '<span style="margin-left:6px;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:rgba(234,179,8,0.2);color:#ca8a04;" title="Pinned — never auto-deleted">📌 Pinned</span>' : ''}
           </td>
           <td style="padding: 8px; font-size: 12px; color: var(--text-muted);">${new Date(v.publishedAt).toLocaleString()}</td>
           <td style="padding: 8px;">${v.sourceCount}</td>
-          <td style="padding: 8px; text-align: right;">
+          <td style="padding: 8px; text-align: right; white-space: nowrap;">
             <button class="btn btn-sm btn-secondary" onclick="previewVersion(${v.version})">Preview</button>
+            <button class="btn btn-sm ${isPinned ? 'btn-warning' : 'btn-secondary'}" onclick="togglePinVersion(${v.version})" title="${isPinned ? 'Unpin — allow auto-deletion' : 'Pin — keep forever'}">${isPinned ? 'Unpin' : 'Pin'}</button>
             ${isCurrent ? '' : `<button class="btn btn-sm btn-primary" onclick="restoreVersion(${v.version})">Restore</button>`}
           </td>
         </tr>`;
@@ -317,18 +258,32 @@ async function previewVersion(version) {
 }
 
 async function restoreVersion(version) {
-  if (!confirm(`Restore to version ${version}?`)) return;
+  if (!confirm(`Restore to version ${version}? Current state will be saved as a new version first.`)) return;
   try {
     const res = await fetch(`${API}/config/versions/${version}/restore`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
-      await Promise.all([fetchSources(), fetchConfigStatus()]);
+      await fetchSources();
       showVersionHistory();
     } else {
       alert('Failed to restore: ' + (data.error || 'Unknown error'));
     }
   } catch (err) {
     alert('Failed to restore: ' + err.message);
+  }
+}
+
+async function togglePinVersion(version) {
+  try {
+    const res = await fetch(`${API}/config/versions/${version}/pin`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      showVersionHistory();
+    } else {
+      alert('Failed to pin version: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Failed to pin version: ' + err.message);
   }
 }
 
@@ -723,7 +678,7 @@ function renderForm(source) {
       </div>`}
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary">${isEdit ? 'Save to Draft' : 'Add to Draft'}</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? 'Save' : 'Add Source'}</button>
       </div>
     </form>
   `;

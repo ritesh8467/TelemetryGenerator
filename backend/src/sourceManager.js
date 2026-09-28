@@ -28,6 +28,13 @@ export function isActive(sourceId) {
   return activeWorkers.has(sourceId);
 }
 
+export function restart(sourceId) {
+  if (isActive(sourceId)) {
+    stop(sourceId);
+    start(sourceId);
+  }
+}
+
 export function startAll() {
   const sources = config.getAll();
   for (const source of sources) {

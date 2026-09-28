@@ -150,6 +150,13 @@ header h1 { font-size: 15px; font-weight: 600; line-height: 1.2; }
 
 .btn-danger:hover { background: var(--danger); color: #fff; }
 
+.btn-warning {
+  background: transparent;
+  color: #ca8a04;
+  border: 1px solid #ca8a04;
+}
+.btn-warning:hover { background: rgba(234,179,8,0.15); }
+
 .btn-success {
   background: transparent;
   color: var(--success);

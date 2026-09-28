@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import * as config from '../config.js';
-import { start, stop, startAll, stopAll, isActive } from '../sourceManager.js';
+import { start, stop, startAll, stopAll, isActive, restart } from '../sourceManager.js';
 import { getRecentLogs, getErrorLogs, getHealthStatus, clearRecentLogs, clearErrorLogs, clearHealthStatus } from '../workers/sourceWorker.js';
 
 export const sourceRouter = Router();
@@ -35,22 +35,14 @@ function normalizeEndpoints(body) {
 }
 
 sourceRouter.get('/', (req, res) => {
-  const draft = config.getDraft();
-  const published = config.getAll();
-  const sources = (draft ? draft.sources : published).map(s => {
-    // Inline migration: populate fileOutputs from legacy filePath if missing
+  const sources = config.getAll().map(s => {
     if (!s.fileOutputs) {
       s = { ...s, fileOutputs: s.filePath ? [{ path: s.filePath, label: 'File', enabled: !!s.fileEnabled }] : [] };
     }
     const rawHealth = getHealthStatus(s.id);
     const active = s.enabled !== false;
     const health = rawHealth || (active ? { status: 'pending' } : null);
-    const published_s = published.find(ps => ps.id === s.id);
-    const draftOnly = !!draft && !published_s;
-    if (published_s && published_s.stats) {
-      s = { ...s, stats: published_s.stats };
-    }
-    return { ...s, active, health, draftOnly };
+    return { ...s, active, health, draftOnly: false };
   });
   res.json({ sources });
 });
@@ -126,39 +118,18 @@ sourceRouter.post('/', (req, res) => {
     metadata: req.body.metadata || {},
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   };
-  let draft = config.getDraft();
-  if (!draft) {
-    draft = { sources: config.getAll().map(s => ({ ...s })) };
-  } else {
-    draft = { sources: [...draft.sources] };
-  }
-  draft.sources.push(source);
-  config.saveDraft(draft.sources);
+  config.upsert(source);
+  config.applyNow();
   res.status(201).json(source);
 });
 
 sourceRouter.put('/:id', (req, res) => {
-  let draft = config.getDraft();
-  if (!draft) {
-    draft = { sources: config.getAll().map(s => ({ ...s })) };
-  } else {
-    draft = { sources: [...draft.sources] };
-  }
-
-  const idx = draft.sources.findIndex(s => s.id === req.params.id);
-  if (idx < 0) return res.status(404).json({ error: 'Source not found' });
-
-  const existing = draft.sources[idx];
+  const existing = config.getOne(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Source not found' });
 
   if (req.body.endpointUrls || req.body.endpointUrl) {
     req.body.endpointUrls = normalizeEndpoints(req.body);
     delete req.body.endpointUrl;
-  }
-
-  if (req.body.httpEnabled !== undefined || req.body.fileEnabled !== undefined) {
-    const httpEnabled = req.body.httpEnabled ?? existing.httpEnabled ?? true;
-    const fileEnabled = req.body.fileEnabled ?? existing.fileEnabled ?? false;
-    req.body.enabled = httpEnabled || fileEnabled;
   }
 
   if (req.body.intervalSeconds !== undefined) {
@@ -169,25 +140,22 @@ sourceRouter.put('/:id', (req, res) => {
   }
 
   const updated = { ...existing, ...req.body, id: existing.id, stats: existing.stats };
-  draft.sources[idx] = updated;
-  config.saveDraft(draft.sources);
+  config.upsert(updated);
+  config.applyNow();
+
+  // Restart worker immediately so new interval/volume takes effect
+  restart(existing.id);
 
   res.json(updated);
 });
 
 sourceRouter.delete('/:id', (req, res) => {
-  let draft = config.getDraft();
-  if (!draft) {
-    draft = { sources: config.getAll().map(s => ({ ...s })) };
-  } else {
-    draft = { sources: [...draft.sources] };
-  }
+  const source = config.getOne(req.params.id);
+  if (!source) return res.status(404).json({ error: 'Source not found' });
 
-  const idx = draft.sources.findIndex(s => s.id === req.params.id);
-  if (idx < 0) return res.status(404).json({ error: 'Source not found' });
-
-  draft.sources.splice(idx, 1);
-  config.saveDraft(draft.sources);
+  stop(req.params.id);
+  config.remove(req.params.id);
+  config.applyNow();
 
   res.json({ deleted: true });
 });
@@ -215,14 +183,7 @@ sourceRouter.get('/:id/errors', (req, res) => {
 });
 
 sourceRouter.post('/:id/duplicate', (req, res) => {
-  let draft = config.getDraft();
-  if (!draft) {
-    draft = { sources: config.getAll().map(s => ({ ...s })) };
-  } else {
-    draft = { sources: [...draft.sources] };
-  }
-
-  const source = draft.sources.find(s => s.id === req.params.id);
+  const source = config.getOne(req.params.id);
   if (!source) return res.status(404).json({ error: 'Source not found' });
 
   const duplicate = {
@@ -232,8 +193,8 @@ sourceRouter.post('/:id/duplicate', (req, res) => {
     enabled: false,
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   };
-  draft.sources.push(duplicate);
-  config.saveDraft(draft.sources);
+  config.upsert(duplicate);
+  config.applyNow();
 
   res.status(201).json(duplicate);
 });

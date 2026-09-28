@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as config from '../config.js';
-import { stopAll, startAll } from '../sourceManager.js';
+import { stopAll, startAll, restart } from '../sourceManager.js';
 
 export const configRouter = Router();
 
@@ -111,4 +111,11 @@ configRouter.post('/versions/:n/restore', (req, res) => {
   } else {
     res.status(500).json(result);
   }
+});
+
+configRouter.post('/versions/:n/pin', (req, res) => {
+  const versionNumber = parseInt(req.params.n);
+  const pinned = config.pinVersion(versionNumber);
+  if (pinned === null) return res.status(404).json({ error: 'Version not found' });
+  res.json({ version: versionNumber, pinned });
 });

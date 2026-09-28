@@ -329,8 +329,11 @@ function saveToVersionHistory() {
     versionIndex.currentVersion = version;
 
     const maxVersions = getSettings().maxVersions || 10;
-    if (versionIndex.versions.length > maxVersions) {
-      const removed = versionIndex.versions.pop();
+    const unpinned = versionIndex.versions.filter(v => !v.pinned);
+    while (unpinned.length > maxVersions) {
+      const removed = unpinned.pop();
+      const idx = versionIndex.versions.findIndex(v => v.version === removed.version);
+      if (idx >= 0) versionIndex.versions.splice(idx, 1);
       try {
         unlinkSync(join(VERSIONS_DIR, removed.filename));
       } catch (err) {
@@ -365,14 +368,45 @@ export function pruneVersionHistory(maxVersions) {
     const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
     const versionIndex = JSON.parse(raw);
     let changed = false;
-    while (versionIndex.versions.length > maxVersions) {
-      const removed = versionIndex.versions.pop();
+    const unpinned = versionIndex.versions.filter(v => !v.pinned);
+    while (unpinned.length > maxVersions) {
+      const removed = unpinned.pop();
+      const idx = versionIndex.versions.findIndex(v => v.version === removed.version);
+      if (idx >= 0) versionIndex.versions.splice(idx, 1);
       try { unlinkSync(join(VERSIONS_DIR, removed.filename)); } catch {}
       changed = true;
     }
     if (changed) writeFileSync(VERSIONS_INDEX, JSON.stringify(versionIndex, null, 2));
   } catch (err) {
     console.error('Failed to prune version history:', err.message);
+  }
+}
+
+export function applyNow() {
+  try {
+    const { version, publishedAt } = saveToVersionHistory();
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    discardDraft();
+    return { success: true, version, publishedAt };
+  } catch (err) {
+    console.error('Failed to apply changes:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+export function pinVersion(versionNumber) {
+  try {
+    if (!existsSync(VERSIONS_INDEX)) return null;
+    const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
+    const index = JSON.parse(raw);
+    const vInfo = index.versions.find(v => v.version === versionNumber);
+    if (!vInfo) return null;
+    vInfo.pinned = !vInfo.pinned;
+    writeFileSync(VERSIONS_INDEX, JSON.stringify(index, null, 2));
+    return vInfo.pinned;
+  } catch (err) {
+    console.error('Failed to pin version:', err.message);
+    return null;
   }
 }
 
