@@ -83,10 +83,21 @@ class Writer {
   }
 }
 
+// Old-style (non-flexible) response frame: [size][correlationId][body]
 function frame(correlationId, body) {
   const hdr = Buffer.alloc(4 + 4);
   hdr.writeInt32BE(4 + body.length, 0);
   hdr.writeInt32BE(correlationId, 4);
+  return Buffer.concat([hdr, body]);
+}
+
+// Flexible response frame: [size][correlationId][0x00 empty-tag-section][body]
+// Required for ApiVersions v3+ responses — franz-go expects this header format
+function flexFrame(correlationId, body) {
+  const hdr = Buffer.alloc(4 + 4 + 1);
+  hdr.writeInt32BE(4 + 1 + body.length, 0); // size includes correlationId + tag byte
+  hdr.writeInt32BE(correlationId, 4);
+  hdr[8] = 0x00; // empty tagged fields in response header
   return Buffer.concat([hdr, body]);
 }
 
@@ -108,32 +119,37 @@ class Reader {
 
 function apiVersionsResponse(correlationId, requestedVersion) {
   // Supported APIs: key, min, max
+  // Max versions kept below the flexible-encoding threshold for each API so we
+  // never receive compact/varint-encoded request bodies (which our simple parser
+  // doesn't handle). Flexible thresholds: Metadata v9, ListGroups v3,
+  // DescribeGroups v5, OffsetFetch v6, ListOffsets v6, FindCoordinator v3.
   const apis = [
-    [18, 0, 3],  // ApiVersions
-    [3,  0, 5],  // Metadata
-    [16, 0, 2],  // ListGroups
-    [15, 0, 3],  // DescribeGroups
-    [9,  0, 5],  // OffsetFetch
-    [2,  0, 4],  // ListOffsets
-    [10, 0, 3],  // FindCoordinator
-    [4,  0, 2],  // LeaderAndIsr (just advertise, never called)
-    [20, 0, 4],  // DeleteTopics (just advertise)
+    [18, 0, 3],  // ApiVersions      (flexible v3, handled via flexFrame)
+    [3,  0, 5],  // Metadata          (flexible v9 — v5 is safe)
+    [16, 0, 2],  // ListGroups        (flexible v3 — v2 is safe)
+    [15, 0, 3],  // DescribeGroups    (flexible v5 — v3 is safe)
+    [9,  0, 5],  // OffsetFetch       (flexible v6 — v5 is safe)
+    [2,  0, 4],  // ListOffsets       (flexible v6 — v4 is safe)
+    [10, 0, 2],  // FindCoordinator   (flexible v3 — v2 is safe)
+    [4,  0, 2],  // LeaderAndIsr
+    [20, 0, 4],  // DeleteTopics
   ];
 
   if (requestedVersion >= 3) {
-    // Flexible format response: use compact arrays + tagged fields
+    // ApiVersions v3+ uses flexible RESPONSE format: compact arrays + tagged fields.
+    // Also requires flexible response HEADER (empty tag-section byte after correlationId).
     const w = new Writer();
     w.i16(0); // error_code
-    w.uvarint(apis.length + 1); // compact array length = N+1
+    w.uvarint(apis.length + 1); // compact array: length = N+1 (N=9 → 0x0A)
     for (const [key, min, max] of apis) {
       w.i16(key).i16(min).i16(max).taggedFields();
     }
     w.i32(0); // throttle_time_ms
-    w.taggedFields(); // top-level tagged fields
-    return frame(correlationId, w.build());
+    w.taggedFields(); // top-level empty tagged fields
+    return flexFrame(correlationId, w.build()); // ← must use flexFrame, not frame()
   }
 
-  // v0/v1/v2: old-style arrays
+  // v0/v1/v2: old-style arrays, old-style response header
   const w = new Writer();
   w.i16(0); // error_code
   w.i32(apis.length);
