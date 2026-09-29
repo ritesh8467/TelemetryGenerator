@@ -40,8 +40,19 @@ export function generate(count, opts = {}) {
   const podName = `${podPrefix}-${faker.string.alphanumeric(10)}`;
   const container = faker.helpers.arrayElement(CONTAINERS);
 
+  const dist = opts.levelDistribution;
+  const weights = dist
+    ? [
+        { value: 'INFO', weight: Math.max(0, dist.info ?? 55) },
+        { value: 'DEBUG', weight: Math.max(0, dist.debug ?? 20) },
+        { value: 'WARN', weight: Math.max(0, dist.warn ?? 15) },
+        { value: 'ERROR', weight: Math.max(0, dist.error ?? 10) }
+      ].filter(w => w.weight > 0)
+    : LEVEL_WEIGHTS;
+  const effectiveWeights = weights.length > 0 ? weights : LEVEL_WEIGHTS;
+
   for (let i = 0; i < count; i++) {
-    const level = faker.helpers.weightedArrayElement(LEVEL_WEIGHTS);
+    const level = faker.helpers.weightedArrayElement(effectiveWeights);
     let msg = faker.helpers.arrayElement(MESSAGES[level]);
     msg = msg
       .replace('{replicas}', String(faker.number.int({ min: 2, max: 10 })))

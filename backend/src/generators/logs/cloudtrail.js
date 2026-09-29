@@ -13,13 +13,19 @@ const EVENTS_BY_SOURCE = {
 
 export function generate(count, opts = {}) {
   const records = [];
+  const dist = opts.levelDistribution;
+  const total = dist ? ((dist.error ?? 0) + (dist.warn ?? 0) + (dist.info ?? 0) + (dist.debug ?? 0)) || 1 : 1;
+  const errorProb = dist ? (dist.error ?? 0) / total : 0.05;
+  const warnProb = dist ? (dist.warn ?? 0) / total : 0.08;
 
   for (let i = 0; i < count; i++) {
     const eventSource = faker.helpers.arrayElement(EVENT_SOURCES);
     const eventName = faker.helpers.arrayElement(EVENTS_BY_SOURCE[eventSource]);
     const region = faker.helpers.arrayElement(REGIONS);
     const accountId = opts.accountId || faker.string.numeric(12);
-    const isError = Math.random() < 0.05;
+    const rand = Math.random();
+    const isError = rand < errorProb;
+    const isWarning = !isError && rand < errorProb + warnProb;
 
     const record = {
       eventVersion: '1.08',
@@ -47,6 +53,9 @@ export function generate(count, opts = {}) {
     if (isError) {
       record.errorCode = faker.helpers.arrayElement(['AccessDenied', 'UnauthorizedAccess', 'ResourceNotFoundException', 'ThrottlingException']);
       record.errorMessage = `User: ${record.userIdentity.arn} is not authorized to perform: ${eventName}`;
+    } else if (isWarning) {
+      record.errorCode = 'ThrottlingException';
+      record.errorMessage = `Rate exceeded for ${eventName} in ${region}`;
     }
 
     records.push(JSON.stringify(record));

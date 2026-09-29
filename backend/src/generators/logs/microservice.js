@@ -477,20 +477,60 @@ const LOG_GENERATORS = [
   { fn: applicationLog, weight: 20 }
 ];
 
+function pickRecord() {
+  const totalWeight = LOG_GENERATORS.reduce((s, g) => s + g.weight, 0);
+  let r = Math.random() * totalWeight;
+  for (const g of LOG_GENERATORS) {
+    r -= g.weight;
+    if (r <= 0) return g.fn();
+  }
+  return LOG_GENERATORS[0].fn();
+}
+
+function levelOf(record) {
+  try {
+    const obj = typeof record === 'string' ? JSON.parse(record) : record;
+    return (obj.level || 'info').toLowerCase();
+  } catch { return 'info'; }
+}
+
 export function generate(count, opts = {}) {
   _tz = opts.timezone || 'UTC';
-  const records = [];
-  const totalWeight = LOG_GENERATORS.reduce((s, g) => s + g.weight, 0);
+  const dist = opts.levelDistribution;
 
-  for (let i = 0; i < count; i++) {
-    let r = Math.random() * totalWeight;
-    let gen = LOG_GENERATORS[0].fn;
-    for (const g of LOG_GENERATORS) {
-      r -= g.weight;
-      if (r <= 0) { gen = g.fn; break; }
-    }
-    records.push(JSON.stringify(gen()));
+  if (!dist) {
+    const records = [];
+    for (let i = 0; i < count; i++) records.push(JSON.stringify(pickRecord()));
+    return records;
   }
 
-  return records;
+  // Pool-based approach to honour requested level distribution
+  const totalWeight = (dist.info ?? 0) + (dist.warn ?? 0) + (dist.error ?? 0) + (dist.debug ?? 0) || 1;
+  const poolSize = Math.max(count * 4, 40);
+  const pools = { info: [], warn: [], error: [], debug: [] };
+  for (let i = 0; i < poolSize; i++) {
+    const rec = JSON.stringify(pickRecord());
+    const lvl = levelOf(rec);
+    const key = ['info', 'warn', 'error', 'debug'].includes(lvl) ? lvl : 'info';
+    pools[key].push(rec);
+  }
+
+  const targets = {
+    info: Math.round(count * (dist.info ?? 0) / totalWeight),
+    warn: Math.round(count * (dist.warn ?? 0) / totalWeight),
+    error: Math.round(count * (dist.error ?? 0) / totalWeight),
+    debug: Math.round(count * (dist.debug ?? 0) / totalWeight)
+  };
+
+  const result = [];
+  for (const [lvl, target] of Object.entries(targets)) {
+    const pool = pools[lvl];
+    for (let i = 0; i < target; i++) {
+      result.push(pool[i % Math.max(pool.length, 1)]);
+    }
+  }
+  // Fill remainder from general pool
+  while (result.length < count) result.push(JSON.stringify(pickRecord()));
+  result.sort(() => Math.random() - 0.5);
+  return result.slice(0, count);
 }

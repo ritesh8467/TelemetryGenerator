@@ -9,6 +9,9 @@ import { statsRouter } from './routes/stats.js';
 import { configRouter } from './routes/config.js';
 import { settingsRouter } from './routes/settings.js';
 import { startAll } from './sourceManager.js';
+import { startMetricsServers } from './metricsServer.js';
+import { startMysqlServer } from './mysqlServer.js';
+import { startKafkaBrokerServer } from './kafkaServer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -30,6 +33,9 @@ app.get('/api/health', (req, res) => {
 settings.load();
 config.load();
 startAll();
+startMetricsServers();
+startMysqlServer();
+startKafkaBrokerServer();
 
 app.listen(PORT, () => {
   console.log(`Telemetry Generator running at http://localhost:${PORT}`);

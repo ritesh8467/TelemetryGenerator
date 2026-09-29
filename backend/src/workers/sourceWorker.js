@@ -3,6 +3,29 @@ import { get as getSettings } from '../settings.js';
 import { getGenerator } from '../generators/index.js';
 import { getSender, getFileSender } from '../senders/index.js';
 
+// Hardcoded signal config for OTel app sources — logs + traces written to standard paths.
+// Metrics are served by metricsServer.js on their Prometheus ports independently.
+const OTEL_APP_SIGNALS = {
+  nginxOtel: [
+    { dataType: 'logs',   format: 'text', filePath: '/tmp/otel/nginx/access.log',      label: 'Nginx access log' },
+    { dataType: 'logs',   format: 'text', filePath: '/tmp/otel/nginx/error.log',       label: 'Nginx error log' },
+    { dataType: 'traces', format: 'otlp', filePath: '/tmp/otel/nginx-traces.json',    label: 'Nginx traces' }
+  ],
+  mysqlOtel: [
+    { dataType: 'logs',   format: 'text', filePath: '/tmp/otel/mysql/error.log',      label: 'MySQL error log' },
+    { dataType: 'traces', format: 'otlp', filePath: '/tmp/otel/mysql-traces.json',    label: 'MySQL traces' }
+  ],
+  kafkaOtel: [
+    { dataType: 'logs',   format: 'text', filePath: '/tmp/otel/kafka/server.log',     label: 'Kafka server log',     generatorOpts: { logType: 'server' } },
+    { dataType: 'logs',   format: 'text', filePath: '/tmp/otel/kafka/controller.log', label: 'Kafka controller log', generatorOpts: { logType: 'controller' } },
+    { dataType: 'traces', format: 'otlp', filePath: '/tmp/otel/kafka-traces.json',    label: 'Kafka traces' }
+  ],
+  dockerOtel: [
+    { dataType: 'logs',   format: 'text', filePath: '/tmp/otel/docker/daemon.log',    label: 'Docker daemon log' },
+    { dataType: 'traces', format: 'otlp', filePath: '/tmp/otel/docker-traces.json',   label: 'Docker traces' }
+  ]
+};
+
 const MAX_RECENT = 20;
 const MAX_ERRORS = 50;
 const recentLogs = new Map();
@@ -59,10 +82,68 @@ function storeRecent(sourceId, records, dataType) {
   recentLogs.set(sourceId, entries);
 }
 
+async function tickOtelApp(source, settings) {
+  const signals = OTEL_APP_SIGNALS[source.subType];
+  if (!signals) return;
+
+  const currentSource = config.getOne(source.id);
+  if (currentSource && currentSource.enabled === false) return;
+
+  const volume = settings.overrideEnabled ? settings.globalVolumePerInterval : source.volumePerInterval;
+  const opts = { ...(source.metadata || {}), timezone: settings.timezone };
+  const now = new Date().toISOString();
+  const allEpHealth = [];
+  let successCount = 0;
+  let failCount = 0;
+  let bytesThisTick = 0;
+  const fileSenderModule = getFileSender();
+
+  for (const sig of signals) {
+    const generator = getGenerator(sig.dataType, source.subType);
+    if (!generator) continue;
+    const records = generator.generate(volume, { ...opts, ...(sig.generatorOpts || {}) });
+    storeRecent(source.id, records, sig.dataType);
+    const result = await fileSenderModule.send(records, sig.filePath, sig.dataType, sig.format);
+    if (result.ok) {
+      successCount++;
+      bytesThisTick += result.bytes || 0;
+      allEpHealth.push({ url: sig.filePath, label: sig.label, status: 'green', error: null, lastCheck: now });
+    } else {
+      failCount++;
+      allEpHealth.push({ url: sig.filePath, label: sig.label, status: 'red', error: result.body, lastCheck: now });
+      const errors = errorLogs.get(source.id) || [];
+      errors.push({ timestamp: now, endpoint: sig.label, type: 'FILE', error: result.body });
+      errorLogs.set(source.id, errors.slice(-MAX_ERRORS));
+    }
+  }
+
+  if (allEpHealth.length === 0) return;
+
+  const aggregate = failCount === 0 ? 'green' : successCount === 0 ? 'red' : 'mixed';
+  healthStatus.set(source.id, { status: aggregate, endpoints: allEpHealth, lastCheck: now });
+
+  if (currentSource) {
+    const prevStats = currentSource.stats || {};
+    config.updateStats(source.id, {
+      messagesSent: (prevStats.messagesSent || 0) + (volume * successCount),
+      errors: (prevStats.errors || 0) + failCount,
+      lastSentAt: successCount > 0 ? now : (prevStats.lastSentAt || null),
+      bytesSent: (prevStats.bytesSent || 0) + bytesThisTick,
+      spansSent: prevStats.spansSent || 0
+    });
+  }
+}
+
 export function createWorker(source) {
   return {
     async tick() {
       try {
+        if (source.dataType === 'otelApp') {
+          const settings = getSettings();
+          await tickOtelApp(source, settings);
+          return;
+        }
+
         const generator = getGenerator(source.dataType, source.subType);
         if (!generator) {
           console.error(`No generator for ${source.dataType}/${source.subType}`);
@@ -71,7 +152,13 @@ export function createWorker(source) {
 
         const settings = getSettings();
         const volume = settings.overrideEnabled ? settings.globalVolumePerInterval : source.volumePerInterval;
-        const records = generator.generate(volume, { ...(source.metadata || {}), timezone: settings.timezone });
+        const records = generator.generate(volume, {
+          ...(source.metadata || {}),
+          timezone: settings.timezone,
+          levelDistribution: source.levelDistribution || null,
+          severityDistribution: source.severityDistribution || null,
+          piiTypes: source.piiTypes || null
+        });
         const sender = getSender(source.dataType);
         if (!sender) {
           console.error(`No sender for ${source.dataType}`);
@@ -125,7 +212,15 @@ export function createWorker(source) {
           const endpoints = (currentSource?.endpointUrls || source.endpointUrls || []).filter(ep => ep.enabled !== false && ep.url);
           if (endpoints.length > 0) {
             const results = await Promise.allSettled(
-              endpoints.map(ep => sender.send(records, ep.url, source.format, source.metadata))
+              endpoints.map(ep => {
+              // Merge source-level headers + endpoint-level headers; endpoint takes precedence on same key
+              const srcHeaders = currentSource?.headers || source.headers || [];
+              const epHeaders = ep.headers || [];
+              const merged = Object.values(
+                [...srcHeaders, ...epHeaders].reduce((acc, h) => { if (h.key) acc[h.key] = h; return acc; }, {})
+              );
+              return sender.send(records, ep.url, source.format, source.metadata, merged);
+            })
             );
             for (let i = 0; i < endpoints.length; i++) {
               const ep = endpoints[i];

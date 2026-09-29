@@ -1,4 +1,4 @@
-export async function send(metrics, endpointUrl, format, metadata = {}) {
+export async function send(metrics, endpointUrl, format, metadata = {}, customHeaders = []) {
   let body;
   let contentType = 'text/plain';
 
@@ -46,6 +46,9 @@ export async function send(metrics, endpointUrl, format, metadata = {}) {
   if (metadata.sourceCategory) headers['X-Sumo-Category'] = metadata.sourceCategory;
   if (metadata.sourceHost) headers['X-Sumo-Host'] = metadata.sourceHost;
   if (metadata.sourceName) headers['X-Sumo-Name'] = metadata.sourceName;
+  for (const h of customHeaders) {
+    if (h.key) headers[h.key] = h.value || '';
+  }
 
   let url = endpointUrl;
   if (format === 'otlp' && !url.endsWith('/v1/metrics') && !url.includes('receiver/v1/http')) {

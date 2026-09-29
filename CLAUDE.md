@@ -19,7 +19,7 @@ npm start
 
 ## Project Overview
 
-**Telemetry Generator** is a full-stack Node.js + vanilla JS application that generates realistic telemetry data (logs, metrics, traces) and sends it to multiple destinations simultaneously. It is designed for testing observability pipelines.
+**Telemetry Generator** is a full-stack Node.js + vanilla JS application that generates realistic telemetry data (logs, metrics, traces) and sends it to multiple destinations simultaneously. It is designed for testing observability pipelines, including an **OTel Apps** mode that mimics real application telemetry (nginx, MySQL) so an OTel collector can connect to it exactly as it would to the real software.
 
 ### Architecture
 
@@ -118,6 +118,18 @@ npm start
   - `tick()` called every N seconds; calls generator → sender; respects global override volume
   - Tracks health status (green/red/mixed) per endpoint
   - Recent logs and error logs stored in Map; entries trimmed to 20/50 max
+  - `OTEL_APP_SIGNALS` — hardcoded file paths for OTel app log/trace outputs (nginx, MySQL)
+
+- **`backend/src/metricsServer.js`** — nginx stub_status HTTP server on port **9113**
+  - Serves `/nginx_status` in nginx stub_status format for the OTel `nginx/` receiver
+  - State evolves every second (connections, requests, active/reading/writing/waiting)
+  - Started automatically via `startMetricsServers()` in `server.js`
+
+- **`backend/src/mysqlServer.js`** — MySQL wire protocol server on port **3306**
+  - Speaks the real MySQL 4.1+ protocol; OTel `mysql` receiver connects to it like a real DB
+  - Accepts any credentials; handles `SHOW GLOBAL STATUS`, `SHOW GLOBAL VARIABLES`, `performance_schema` queries
+  - State evolves every second; returns realistic MySQL 8.0.35 metric values
+  - Started automatically via `startMysqlServer()` in `server.js`
 
 - **`backend/src/generators/`** — data generation per type/subtype
   - Each file exports `generate(count, opts)` returning an array of records
@@ -397,6 +409,225 @@ To pre-populate the app with a demo source on fresh install, add an entry to `SE
 ### Step 5 — Verify
 
 Restart the server (`npm run dev`), open the UI, click **+ Add Source**, and confirm the new sub-type appears in the dropdown. Add a source pointing at a real endpoint and check the green health indicator after the first tick.
+
+---
+
+## OTel Apps — Mimicking Real Application Telemetry
+
+OTel Apps (`dataType: 'otelApp'`) are a separate source category from regular push-based sources. They live in the **OTel Apps** sidebar tab and are designed to mimic the exact telemetry a real production application would emit — same log formats, same metric names, same trace attributes. An OTel collector should be able to point at this app and receive data indistinguishable from the real thing.
+
+### Architecture
+
+OTel Apps do **not** use the normal HTTP/file sender pipeline. Instead:
+
+- **Logs** — written directly to fixed file paths under `/tmp/otel/` by `sourceWorker.js` using `OTEL_APP_SIGNALS` (hardcoded per subType)
+- **Metrics** — served on dedicated TCP/HTTP ports by `metricsServer.js` (nginx) and `mysqlServer.js` (MySQL); the OTel collector scrapes/connects to these independently of the source worker tick
+- **Traces** — written to OTLP JSON files under `/tmp/otel/` by `sourceWorker.js`; a collector reads these via filelog or the app pushes direct OTLP
+
+Signal paths are defined in `backend/src/workers/sourceWorker.js` in the `OTEL_APP_SIGNALS` map.
+
+### Design Rules
+
+1. **Never use Prometheus receivers.** Always use the app's native OTel receiver or protocol:
+   - nginx → `nginx/` receiver reading stub_status (HTTP, port 9113)
+   - MySQL → `mysql` receiver connecting via MySQL wire protocol (TCP, port 3306) in `mysqlServer.js`
+   - Kafka → `kafkametrics` receiver connecting via Kafka wire protocol (TCP, port 9092) in `kafkaServer.js`
+   - Docker → `docker_stats` receiver connecting to Docker HTTP API (HTTP, port 2375) in `metricsServer.js`
+   - Every future OTel App **must** implement the app's native protocol/API server — never fall back to a Prometheus HTTP scrape endpoint.
+
+2. **Wire-protocol server pattern** — for apps where the OTel receiver connects to a TCP service:
+   - Create `backend/src/{app}Server.js` (see `mysqlServer.js` for MySQL, `kafkaServer.js` for Kafka)
+   - Export `start{App}Server(port)` and `stop{App}Server()`
+   - Import and call `start{App}Server()` from `backend/src/server.js`
+   - For HTTP-based APIs (like Docker daemon), add a `makeDockerApiServer(port)` function to `metricsServer.js` and call it from `startMetricsServers()`
+   - The server must handle the minimal subset of the protocol needed by the OTel receiver
+
+3. **Active ports:**
+   - 9113 — nginx stub_status (`nginx/` receiver)
+   - 3306 — MySQL wire protocol (`mysql` receiver)
+   - 9092 — Kafka wire protocol (`kafkametrics` receiver)
+   - 2375 — Docker HTTP API (`docker_stats` receiver)
+
+4. **Log format must match the real app exactly** — timestamps, field order, multiline behaviour. OTel collector regex/multiline patterns are written against real app output; the generator must match them.
+5. **Trace attributes follow OTel semantic conventions** (`db.system`, `http.method`, `net.peer.name`, etc.).
+6. **Metrics reflect real OTel receiver output** — use the same metric names the real OTel receiver would produce (e.g., `kafka.brokers`, `container.cpu.usage.total`, not arbitrary names).
+
+---
+
+### Nginx OTel App (`subType: 'nginxOtel'`)
+
+Mimics a production nginx 1.25 instance with the nginx-otel module enabled.
+
+#### Logs
+
+Two separate files written by the worker on each tick:
+
+| File | Format | Generator |
+|------|---------|-----------|
+| `/tmp/otel/nginx/access.log` | Apache Combined + nginx timing fields | `generators/logs/nginxOtel.js` → `accessLog()` |
+| `/tmp/otel/nginx/error.log` | nginx error log format | `generators/logs/nginxOtel.js` → `errorLog()` |
+
+**Access log line format** (real nginx Combined + upstream timing):
+```
+1.2.3.4 - - [29/Sep/2026:03:45:11 +0000] "GET /api/v1/users HTTP/1.1" 200 1234 "https://ref.example.com" "Mozilla/5.0..." rt=0.123 uct="0.110" uht="0.110" urt="0.123"
+```
+
+**Error log line format** (real nginx error format — date uses `/` separators):
+```
+2026/09/29 03:45:11 [warn] 12345#12345: *789 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 1.2.3.4, server: example.com, request: "GET /api/v1/users HTTP/1.1", upstream: "http://backend:8080/api/v1/users"
+```
+> **Important:** The timestamp must use `/` separators (`2026/09/29`) not ISO dashes, to match real nginx. The OTel collector multiline pattern for error logs should be `^\d{4}/\d{2}/\d{2} `.
+
+**OTel collector config for logs:**
+```yaml
+receivers:
+  filelog/nginx_access:
+    include: [/tmp/otel/nginx/access.log]
+    start_at: end
+  filelog/nginx_error:
+    include: [/tmp/otel/nginx/error.log]
+    start_at: end
+    multiline:
+      line_start_pattern: '^\d{4}/\d{2}/\d{2} '
+```
+
+#### Metrics
+
+Served by `metricsServer.js` on port **9113** at `/nginx_status` in nginx stub_status format:
+```
+Active connections: 291
+server accepts handled requests
+ 16630948 16630948 31070465
+Reading: 6 Writing: 179 Waiting: 106
+```
+State evolves every second to mimic a live server. Use the OTel **`nginx/` receiver** (not the prometheus receiver):
+```yaml
+receivers:
+  nginx:
+    endpoint: http://localhost:9113/nginx_status
+    collection_interval: 1m
+```
+
+#### Traces
+
+Written to `/tmp/otel/nginx-traces.json` as OTLP JSON (`ExportTraceServiceRequest`). Each span represents one HTTP request handled by nginx:
+- `span.kind: SERVER`
+- Attributes: `http.method`, `http.target`, `http.status_code`, `http.flavor`, `http.host`, `net.peer.ip`, `nginx.upstream_addr`, `nginx.upstream_response_time`, `nginx.request_time`
+- Resource: `service.name`, `service.version: 1.25.3`, `host.name`, `process.runtime.name: nginx`
+- Scope: `nginx-otel-module`
+- Error spans (5xx) include an `upstream_error` event
+
+To receive traces via OTLP push, configure an HTTP endpoint URL in the source pointing to `http://localhost:4318/v1/traces`.
+
+---
+
+### MySQL OTel App (`subType: 'mysqlOtel'`)
+
+Mimics a production MySQL 8.0.35 instance with the OpenTelemetry plugin enabled.
+
+#### Logs
+
+Two separate files written by the worker on each tick:
+
+| File | Format | Generator function |
+|------|---------|-------------------|
+| `/tmp/otel/mysql/error.log` | MySQL 8.0 error log | `generators/logs/mysqlOtel.js` → `errorLog()` |
+| `/tmp/otel/mysql/slow.log` | MySQL slow query log | `generators/logs/mysqlOtel.js` → `slowQueryLog()` |
+
+**Error log line format** (real MySQL 8.0):
+```
+2026-09-29T03:45:11.123456Z 0 [Warning] [MY-010055] [Server] IP address '1.2.3.4' could not be resolved
+```
+> Timestamp must be ISO 8601 with `T` and trailing `Z` (`2026-09-29T03:45:11.123456Z`), followed by thread ID, then `[level]`. The OTel collector regex for this is: `'^(?P<timestamp>\d{4}-\d{2}-\d{2}T[\d:.]+Z) (?P<thread>\d+) \[(?P<level>[^\]]+)\]'`
+
+**Slow query log block format** (real MySQL slow log — multi-line):
+```
+# Time: 2026-09-29T03:45:11.123456Z
+# User@Host: app_user[app_user] @ app-server-01 [1.2.3.4]
+# Query_time: 5.123456  Lock_time: 0.000234 Rows_sent: 0  Rows_examined: 50000
+SET timestamp=1727578511;
+SELECT * FROM orders WHERE created_at > '2026-09-28' AND status IN ('active', 'pending') ORDER BY created_at DESC;
+```
+
+**OTel collector config for logs:**
+```yaml
+receivers:
+  filelog/mysql_error:
+    include: [/tmp/otel/mysql/error.log]
+    start_at: end
+    operators:
+      - type: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T[\d:.]+Z) (?P<thread>\d+) \[(?P<level>[^\]]+)\] (?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '2006-01-02T15:04:05.999999Z'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: ERROR
+            warn: Warning
+            info: Note
+  filelog/mysql_slow:
+    include: [/tmp/otel/mysql/slow.log]
+    start_at: end
+    multiline:
+      line_start_pattern: '^# Time:'
+```
+
+#### Metrics
+
+Served by `mysqlServer.js` — a **real MySQL wire protocol server** on port **3306**. The OTel collector connects to it exactly as it would to a real MySQL instance. Any username/password is accepted.
+
+Responds to:
+- `SHOW GLOBAL STATUS` — 35+ real MySQL status variables (`Uptime`, `Threads_connected`, `Queries`, `Bytes_received`, `Innodb_buffer_pool_reads`, `Com_select`, `Handler_read_*`, etc.) with evolving counters
+- `SHOW GLOBAL VARIABLES` — `innodb_buffer_pool_size`, `max_connections`, `version: 8.0.35`, etc.
+- `SELECT ... FROM performance_schema.table_io_waits_summary_by_table` — rows for 6 production tables
+- `SET`, `USE`, `BEGIN`, `COMMIT` → OK
+- All other `SELECT`/`SHOW` queries → empty resultset
+
+**OTel collector config for metrics:**
+```yaml
+receivers:
+  mysql:
+    endpoint: localhost:3306
+    username: otel_monitor
+    password: any_value_accepted
+    collection_interval: 60s
+```
+
+#### Traces
+
+Written to `/tmp/otel/mysql-traces.json` as OTLP JSON. Each span represents one MySQL query executed by the application:
+- `span.kind: CLIENT`
+- Attributes: `db.system: mysql`, `db.name: production`, `db.operation` (SELECT/INSERT/UPDATE/DELETE), `db.sql.table`, `db.statement`, `net.peer.name`, `net.peer.port: 3306`, `db.user: app_user`, `db.mysql.rows_affected`
+- Resource: `service.name`, `db.system: mysql`, `db.version: 8.0.35`, `host.name`
+- Scope: `mysql-otel-instrumentation`
+- Slow queries (>200ms) include a `slow_query` event with `db.mysql.rows_examined`
+- Failed queries (3%) include an `exception` event (`DeadlockException`, `LockWaitTimeout`, etc.)
+
+To receive traces via OTLP push, configure an HTTP endpoint URL pointing to `http://localhost:4318/v1/traces`.
+
+---
+
+### Adding a New OTel App
+
+1. **Create generators** — one file each under `generators/logs/`, `generators/metrics/` (if needed), `generators/traces/` for the new subType. Log formats and trace attributes must exactly match what the real application produces.
+
+2. **Add signal config** — add an entry to `OTEL_APP_SIGNALS` in `backend/src/workers/sourceWorker.js` listing each file output path.
+
+3. **Add metrics server** — pick the right pattern based on the app's native protocol:
+   - **TCP binary protocol** (like MySQL wire protocol, Kafka wire protocol): Create `backend/src/{app}Server.js`, export `start{App}Server(port)` / `stop{App}Server()`, import and call from `server.js`. See `mysqlServer.js` (port 3306) and `kafkaServer.js` (port 9092) as reference implementations.
+   - **HTTP REST API** (like Docker daemon API): Add a `make{App}ApiServer(port)` function to `metricsServer.js`, call it from `startMetricsServers()`. See `makeDockerApiServer(2375)` as reference.
+   - **HTTP scrape** (like nginx stub_status): Add a handler to `metricsServer.js` and use the native OTel receiver (e.g., `nginx/`) — never use `prometheus/` receiver.
+   - **Never use `prometheus/` receiver** unless there is literally no OTel-native receiver for the app.
+
+4. **Register in frontend** — add to `OTEL_APP_SUBTYPES` in `frontend/app.js`:
+   - Set `metricsPort` to the port your metrics server listens on
+   - Set the metrics signal `displayPath` to the endpoint (e.g., `localhost:9092`, `http://localhost:2375`)
+   - Add `sumoConfig` and `sumoConfigManaged` YAML snippets using the OTel-native receiver
+   - Never put `prometheus/` in the generated OTel YAML configs
+
+5. **Test with a real OTel collector** — point the collector at the fake endpoints and confirm data flows through to the backend (Sumo Logic or local debug exporter).
 
 ---
 

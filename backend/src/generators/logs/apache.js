@@ -16,10 +16,35 @@ const STATUS_WEIGHTS = [
   { code: 404, weight: 7 }, { code: 500, weight: 2 }, { code: 503, weight: 1 }
 ];
 
-function weightedStatus() {
-  const total = STATUS_WEIGHTS.reduce((s, w) => s + w.weight, 0);
+function buildStatusWeights(dist) {
+  if (!dist) return STATUS_WEIGHTS;
+  const e = Math.max(0, dist.error ?? 0);
+  const w = Math.max(0, dist.warn ?? 0);
+  const inf = Math.max(0, dist.info ?? 0);
+  const total = e + w + inf || 1;
+  const errorShare = e / total;
+  const warnShare = w / total;
+  const infoShare = (inf + Math.max(0, dist.debug ?? 0)) / total;
+  return [
+    { code: 200, weight: Math.round(infoShare * 60) + 1 },
+    { code: 201, weight: Math.round(infoShare * 5) + 1 },
+    { code: 204, weight: Math.round(infoShare * 3) + 1 },
+    { code: 301, weight: 3 },
+    { code: 304, weight: 10 },
+    { code: 400, weight: Math.round(warnShare * 30) + 1 },
+    { code: 401, weight: Math.round(warnShare * 20) + 1 },
+    { code: 403, weight: Math.round(warnShare * 10) + 1 },
+    { code: 404, weight: Math.round(warnShare * 40) + 1 },
+    { code: 500, weight: Math.round(errorShare * 50) + 1 },
+    { code: 503, weight: Math.round(errorShare * 50) + 1 }
+  ];
+}
+
+function weightedStatus(weights) {
+  const w = weights || STATUS_WEIGHTS;
+  const total = w.reduce((s, x) => s + x.weight, 0);
   let r = Math.random() * total;
-  for (const { code, weight } of STATUS_WEIGHTS) {
+  for (const { code, weight } of w) {
     r -= weight;
     if (r <= 0) return code;
   }
@@ -29,12 +54,13 @@ function weightedStatus() {
 export function generate(count, opts = {}) {
   const lines = [];
   const timezone = opts.timezone || 'UTC';
+  const statusWeights = buildStatusWeights(opts.levelDistribution);
 
   for (let i = 0; i < count; i++) {
     const ip = faker.internet.ipv4();
     const method = faker.helpers.arrayElement(METHODS);
     const path = faker.helpers.arrayElement(PATHS);
-    const status = weightedStatus();
+    const status = weightedStatus(statusWeights);
     const bytes = faker.number.int({ min: 200, max: 50000 });
     const referer = Math.random() > 0.3 ? faker.internet.url() : '-';
     const ua = faker.internet.userAgent();

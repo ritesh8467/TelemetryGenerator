@@ -21,17 +21,58 @@ function sanitizeVolume(val) {
 }
 
 function normalizeEndpoints(body) {
+  if (Array.isArray(body.endpointUrls) && body.endpointUrls.length === 0) return [];
   if (Array.isArray(body.endpointUrls) && body.endpointUrls.length > 0) {
     return body.endpointUrls.map(ep => ({
       url: ep.url || '',
       label: ep.label || 'Endpoint',
-      enabled: ep.enabled !== false
+      enabled: ep.enabled !== false,
+      headers: Array.isArray(ep.headers)
+        ? ep.headers.filter(h => h.key && h.key.trim()).map(h => ({ key: h.key.trim(), value: h.value || '' }))
+        : []
     }));
   }
   if (body.endpointUrl) {
-    return [{ url: body.endpointUrl, label: 'Primary', enabled: true }];
+    return [{ url: body.endpointUrl, label: 'Primary', enabled: true, headers: [] }];
   }
-  return [{ url: '', label: 'Primary', enabled: true }];
+  return [{ url: '', label: 'Primary', enabled: true, headers: [] }];
+}
+
+function normalizeSourceHeaders(body) {
+  if (!Array.isArray(body.headers)) return [];
+  return body.headers
+    .filter(h => h && h.key && String(h.key).trim())
+    .map(h => ({ key: String(h.key).trim(), value: String(h.value || '') }));
+}
+
+function normalizeLevelDistribution(body) {
+  const dist = body.levelDistribution;
+  if (!dist || typeof dist !== 'object') return undefined;
+  const info = Math.max(0, parseInt(dist.info) || 0);
+  const warn = Math.max(0, parseInt(dist.warn) || 0);
+  const error = Math.max(0, parseInt(dist.error) || 0);
+  const debug = Math.max(0, parseInt(dist.debug) || 0);
+  if (info + warn + error + debug === 0) return undefined;
+  return { info, warn, error, debug };
+}
+
+function normalizeSeverityDistribution(body) {
+  const dist = body.severityDistribution;
+  if (!dist || typeof dist !== 'object') return undefined;
+  const low = Math.max(0, parseInt(dist.low) || 0);
+  const medium = Math.max(0, parseInt(dist.medium) || 0);
+  const high = Math.max(0, parseInt(dist.high) || 0);
+  const critical = Math.max(0, parseInt(dist.critical) || 0);
+  if (low + medium + high + critical === 0) return undefined;
+  return { low, medium, high, critical };
+}
+
+const VALID_PII_TYPES = new Set(['financial', 'identity', 'contact', 'credentials', 'comprehensive']);
+
+function normalizePiiTypes(body) {
+  if (!Array.isArray(body.piiTypes)) return undefined;
+  const types = body.piiTypes.filter(t => VALID_PII_TYPES.has(t));
+  return types.length > 0 ? types : undefined;
 }
 
 sourceRouter.get('/', (req, res) => {
@@ -48,31 +89,25 @@ sourceRouter.get('/', (req, res) => {
 });
 
 sourceRouter.post('/stop-all', (req, res) => {
+  const { ids } = req.body || {};
   const sources = config.getAll();
   for (const source of sources) {
+    if (ids && ids.length > 0 && !ids.includes(source.id)) continue;
     source.enabled = false;
     config.upsert(source);
     stop(source.id);
-  }
-  const draft = config.getDraft();
-  if (draft) {
-    for (const s of draft.sources) s.enabled = false;
-    config.saveDraft(draft.sources);
   }
   res.json({ stopped: true });
 });
 
 sourceRouter.post('/start-all', (req, res) => {
+  const { ids } = req.body || {};
   const sources = config.getAll();
   for (const source of sources) {
+    if (ids && ids.length > 0 && !ids.includes(source.id)) continue;
     source.enabled = true;
     config.upsert(source);
     start(source.id);
-  }
-  const draft = config.getDraft();
-  if (draft) {
-    for (const s of draft.sources) s.enabled = true;
-    config.saveDraft(draft.sources);
   }
   res.json({ started: true });
 });
@@ -95,12 +130,17 @@ sourceRouter.get('/:id', (req, res) => {
 });
 
 sourceRouter.post('/', (req, res) => {
-  const endpointUrls = normalizeEndpoints(req.body);
-  const httpEnabled = req.body.httpEnabled ?? false;
+  const isOtelApp = req.body.dataType === 'otelApp';
+  const endpointUrls = isOtelApp ? [] : normalizeEndpoints(req.body);
+  const httpEnabled = isOtelApp ? false : (req.body.httpEnabled ?? false);
   const fileEnabled = req.body.fileEnabled ?? false;
   const fileOutputs = Array.isArray(req.body.fileOutputs)
     ? req.body.fileOutputs.map(f => ({ path: f.path || '', label: f.label || 'File', enabled: f.enabled !== false }))
     : (req.body.filePath ? [{ path: req.body.filePath, label: 'File', enabled: fileEnabled }] : []);
+  const levelDist = normalizeLevelDistribution(req.body);
+  const severityDist = normalizeSeverityDistribution(req.body);
+  const piiTypesNorm = normalizePiiTypes(req.body);
+  const sourceHeaders = normalizeSourceHeaders(req.body);
   const source = {
     id: uuidv4(),
     name: req.body.name || 'Untitled Source',
@@ -116,6 +156,10 @@ sourceRouter.post('/', (req, res) => {
     volumePerInterval: sanitizeVolume(req.body.volumePerInterval ?? 50),
     format: req.body.format || 'text',
     metadata: req.body.metadata || {},
+    headers: sourceHeaders,
+    ...(levelDist ? { levelDistribution: levelDist } : {}),
+    ...(severityDist ? { severityDistribution: severityDist } : {}),
+    ...(piiTypesNorm ? { piiTypes: piiTypesNorm } : {}),
     stats: { messagesSent: 0, errors: 0, lastSentAt: null }
   };
   config.upsert(source);
@@ -127,7 +171,11 @@ sourceRouter.put('/:id', (req, res) => {
   const existing = config.getOne(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Source not found' });
 
-  if (req.body.endpointUrls || req.body.endpointUrl) {
+  if (existing.dataType === 'otelApp') {
+    req.body.endpointUrls = [];
+    req.body.httpEnabled = false;
+    delete req.body.endpointUrl;
+  } else if (req.body.endpointUrls || req.body.endpointUrl) {
     req.body.endpointUrls = normalizeEndpoints(req.body);
     delete req.body.endpointUrl;
   }
@@ -137,6 +185,22 @@ sourceRouter.put('/:id', (req, res) => {
   }
   if (req.body.volumePerInterval !== undefined) {
     req.body.volumePerInterval = sanitizeVolume(req.body.volumePerInterval);
+  }
+
+  if (req.body.levelDistribution !== undefined) {
+    const dist = normalizeLevelDistribution(req.body);
+    req.body.levelDistribution = dist || null;
+  }
+  if (req.body.severityDistribution !== undefined) {
+    const dist = normalizeSeverityDistribution(req.body);
+    req.body.severityDistribution = dist || null;
+  }
+  if (req.body.piiTypes !== undefined) {
+    const types = normalizePiiTypes(req.body);
+    req.body.piiTypes = types || null;
+  }
+  if (req.body.headers !== undefined) {
+    req.body.headers = normalizeSourceHeaders(req.body);
   }
 
   const updated = { ...existing, ...req.body, id: existing.id, stats: existing.stats };

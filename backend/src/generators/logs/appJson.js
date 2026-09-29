@@ -32,8 +32,19 @@ export function generate(count, opts = {}) {
   const records = [];
   const service = opts.serviceName || faker.helpers.arrayElement(SERVICES);
 
+  const dist = opts.levelDistribution;
+  const weights = dist
+    ? [
+        { value: 'info', weight: Math.max(0, dist.info ?? 60) },
+        { value: 'debug', weight: Math.max(0, dist.debug ?? 15) },
+        { value: 'warn', weight: Math.max(0, dist.warn ?? 15) },
+        { value: 'error', weight: Math.max(0, dist.error ?? 10) }
+      ].filter(w => w.weight > 0)
+    : LEVEL_WEIGHTS;
+  const effectiveWeights = weights.length > 0 ? weights : LEVEL_WEIGHTS;
+
   for (let i = 0; i < count; i++) {
-    const level = faker.helpers.weightedArrayElement(LEVEL_WEIGHTS);
+    const level = faker.helpers.weightedArrayElement(effectiveWeights);
     const msg = faker.helpers.arrayElement(MESSAGES[level]);
     const record = {
       timestamp: new Date().toISOString(),

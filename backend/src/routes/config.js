@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as config from '../config.js';
+
 import { stopAll, startAll, restart } from '../sourceManager.js';
 
 export const configRouter = Router();
@@ -118,4 +119,14 @@ configRouter.post('/versions/:n/pin', (req, res) => {
   const pinned = config.pinVersion(versionNumber);
   if (pinned === null) return res.status(404).json({ error: 'Version not found' });
   res.json({ version: versionNumber, pinned });
+});
+
+configRouter.delete('/versions', (req, res) => {
+  const { versions } = req.body;
+  if (!Array.isArray(versions) || versions.length === 0) {
+    return res.status(400).json({ error: 'versions array required' });
+  }
+  const nums = versions.map(Number).filter(n => !isNaN(n));
+  const result = config.deleteVersions(nums);
+  res.json(result);
 });

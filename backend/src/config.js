@@ -410,6 +410,40 @@ export function pinVersion(versionNumber) {
   }
 }
 
+export function deleteVersions(versionNumbers) {
+  try {
+    if (!existsSync(VERSIONS_INDEX)) return { deleted: 0, skipped: 0 };
+    const raw = readFileSync(VERSIONS_INDEX, 'utf-8');
+    const index = JSON.parse(raw);
+    const { currentVersion } = getVersions();
+    const toDelete = new Set(versionNumbers);
+
+    let deleted = 0;
+    let skipped = 0;
+    const remaining = [];
+
+    for (const vInfo of (index.versions || [])) {
+      if (toDelete.has(vInfo.version)) {
+        if (vInfo.version === currentVersion) { skipped++; remaining.push(vInfo); continue; }
+        try {
+          const vPath = join(VERSIONS_DIR, vInfo.filename);
+          if (existsSync(vPath)) unlinkSync(vPath);
+          deleted++;
+        } catch (_) { skipped++; remaining.push(vInfo); }
+      } else {
+        remaining.push(vInfo);
+      }
+    }
+
+    index.versions = remaining;
+    writeFileSync(VERSIONS_INDEX, JSON.stringify(index, null, 2));
+    return { deleted, skipped };
+  } catch (err) {
+    console.error('Failed to delete versions:', err.message);
+    return { deleted: 0, skipped: 0, error: err.message };
+  }
+}
+
 export function resetStats(id) {
   const source = config.sources.find(s => s.id === id);
   if (source) {

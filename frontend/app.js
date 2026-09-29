@@ -1,10 +1,12 @@
 const API = '/api';
-let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null, activeTab: 'telemetry', settings: { appName: 'Telemetry Generator', timezone: 'UTC', maxVersions: 10, overrideEnabled: false, globalIntervalSeconds: 10, globalVolumePerInterval: 50 } };
+let state = { sources: [], filter: 'all', hasDraft: false, draftChanges: 0, draftSavedAt: null, activeTab: 'observability', settings: { appName: 'Telemetry Generator', timezone: 'UTC', maxVersions: 10, overrideEnabled: false, globalIntervalSeconds: 10, globalVolumePerInterval: 50 } };
 
 const SUB_TYPES = {
   logs: [
     { value: 'apache', label: 'Apache Access Logs' },
     { value: 'nginx', label: 'Nginx Access Logs' },
+    { value: 'nginxOtel', label: 'Nginx OTel (access + error)' },
+    { value: 'mysqlOtel', label: 'MySQL OTel (error + slow + general)' },
     { value: 'appJson', label: 'Application JSON' },
     { value: 'syslog', label: 'Syslog RFC 5424' },
     { value: 'k8sPod', label: 'Kubernetes Pod' },
@@ -18,6 +20,8 @@ const SUB_TYPES = {
     { value: 'host', label: 'Host Metrics' },
     { value: 'application', label: 'Application Metrics' },
     { value: 'kubernetes', label: 'Kubernetes Metrics' },
+    { value: 'nginxOtel', label: 'Nginx OTel Metrics (port 9113)' },
+    { value: 'mysqlOtel', label: 'MySQL OTel Metrics (port 9104)' },
     { value: 'custom', label: 'Custom Metrics' }
   ],
   traces: [
@@ -25,9 +29,43 @@ const SUB_TYPES = {
     { value: 'database', label: 'Database Traces' },
     { value: 'microservice', label: 'Microservice Chain' },
     { value: 'error', label: 'Error Traces' },
-    { value: 'genai', label: 'GenAI / LLM Traces' }
+    { value: 'genai', label: 'GenAI / LLM Traces' },
+    { value: 'nginxOtel', label: 'Nginx OTel Traces' },
+    { value: 'mysqlOtel', label: 'MySQL OTel Traces' }
   ]
 };
+
+const PAGE_SUBTYPES = {
+  security: {
+    logs: ['csiem', 'cloudtrail', 'pii']
+  },
+  observability: {
+    logs: ['apache', 'nginx', 'appJson', 'syslog', 'k8sPod', 'microservice', 'custom'],
+    metrics: ['host', 'application', 'kubernetes', 'custom'],
+    traces: ['httpRequest', 'database', 'microservice', 'error', 'genai']
+  },
+  otel: {
+    otelApp: ['nginxOtel', 'mysqlOtel', 'kafkaOtel', 'dockerOtel']
+  }
+};
+
+function getSourcePage(source) {
+  if (source.dataType === 'otelApp') return 'otel';
+  for (const [page, types] of Object.entries(PAGE_SUBTYPES)) {
+    const subtypes = types[source.dataType] || [];
+    if (subtypes.includes(source.subType)) return page;
+  }
+  return 'observability';
+}
+
+function getPageSubTypes(page, dataType) {
+  const vals = PAGE_SUBTYPES[page]?.[dataType] || [];
+  return (SUB_TYPES[dataType] || []).filter(st => vals.includes(st.value));
+}
+
+function getPageDataTypes(page) {
+  return Object.keys(PAGE_SUBTYPES[page] || {});
+}
 
 const FORMATS = {
   logs: [
@@ -54,9 +92,7 @@ async function fetchSources() {
 }
 
 async function fetchStats() {
-  const res = await fetch(`${API}/stats`);
-  const data = await res.json();
-  renderAggregateStats(data);
+  // Stats endpoint kept for polling compatibility; aggregate UI removed.
 }
 
 async function fetchConfigStatus() {
@@ -161,13 +197,116 @@ async function saveSource(formData, id) {
   await fetchSources();
 }
 
-function renderAggregateStats(data) {
-  document.getElementById('aggregate-stats').innerHTML = `
-    <div class="stat"><span class="stat-value">${data.totalSources}</span> sources</div>
-    <div class="stat"><span class="stat-value">${data.activeSources}</span> active</div>
-    <div class="stat"><span class="stat-value">${formatNumber(data.totalMessagesSent)}</span> messages sent</div>
-    <div class="stat"><span class="stat-value">${data.totalErrors}</span> errors</div>
-  `;
+function renderAggregateStats() { /* removed */ }
+
+async function renderVersionsTabContent() {
+  const wrap = document.getElementById('versions-tab-content');
+  if (!wrap) return;
+  wrap.innerHTML = '<span style="color:var(--text-muted)">Loading...</span>';
+
+  try {
+    const res = await fetch(`${API}/config/versions`);
+    const data = await res.json();
+
+    if (!data.versions || data.versions.length === 0) {
+      wrap.innerHTML = '<span style="color:var(--text-muted)">No versions yet.</span>';
+      return;
+    }
+
+    const current = data.currentVersion;
+    let selectedVersions = new Set();
+
+    const render = () => {
+      wrap.innerHTML = `
+        <div class="versions-tab-toolbar">
+          <span id="vtab-bulk-info" class="versions-bulk-info" style="display:none"></span>
+          <button id="vtab-bulk-delete" class="btn btn-danger btn-sm" style="display:none" onclick="bulkDeleteVersionsTab()">Delete Selected</button>
+        </div>
+        <table class="versions-table" style="width:100%; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border); font-weight: 500;">
+              <td style="padding: 8px; width: 32px;"><input type="checkbox" id="vtab-select-all" onchange="vtabToggleAll(this, ${current})"></td>
+              <td style="padding: 8px;">Version</td>
+              <td style="padding: 8px;">Saved</td>
+              <td style="padding: 8px;">Sources</td>
+              <td style="padding: 8px; text-align: right;">Actions</td>
+            </tr>
+          </thead>
+          <tbody>
+          ${data.versions.map(v => {
+            const isCurrent = v.version === current;
+            const isPinned = !!v.pinned;
+            return `
+            <tr style="border-bottom: 1px solid var(--border);${isCurrent ? ' background: var(--bg-hover, rgba(var(--accent-rgb,59,130,246),0.06));' : ''}">
+              <td style="padding: 8px;">
+                ${!isCurrent ? `<input type="checkbox" class="vtab-checkbox" value="${v.version}" onchange="vtabUpdateBulkBar()">` : ''}
+              </td>
+              <td style="padding: 8px;">
+                v${v.version}
+                ${isCurrent ? '<span style="margin-left:6px;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:var(--success);color:#fff;">Current</span>' : ''}
+                ${isPinned ? '<span style="margin-left:6px;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:rgba(234,179,8,0.2);color:#ca8a04;" title="Pinned — never auto-deleted">📌 Pinned</span>' : ''}
+              </td>
+              <td style="padding: 8px; font-size: 12px; color: var(--text-muted);">${new Date(v.publishedAt).toLocaleString()}</td>
+              <td style="padding: 8px;">${v.sourceCount}</td>
+              <td style="padding: 8px; text-align: right; white-space: nowrap;">
+                <button class="btn btn-sm btn-secondary" onclick="previewVersion(${v.version})">Preview</button>
+                <button class="btn btn-sm ${isPinned ? 'btn-warning' : 'btn-secondary'}" onclick="togglePinVersion(${v.version})" title="${isPinned ? 'Unpin' : 'Pin'}">${isPinned ? 'Unpin' : 'Pin'}</button>
+                ${isCurrent ? '' : `<button class="btn btn-sm btn-primary" onclick="restoreVersion(${v.version})">Restore</button>`}
+              </td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table>`;
+    };
+
+    render();
+  } catch (err) {
+    wrap.innerHTML = '<span style="color:var(--danger)">Failed to load versions.</span>';
+  }
+}
+
+function vtabToggleAll(cb, currentVersion) {
+  document.querySelectorAll('.vtab-checkbox').forEach(c => { c.checked = cb.checked; });
+  vtabUpdateBulkBar();
+}
+
+function vtabUpdateBulkBar() {
+  const checked = [...document.querySelectorAll('.vtab-checkbox:checked')];
+  const all = [...document.querySelectorAll('.vtab-checkbox')];
+  const info = document.getElementById('vtab-bulk-info');
+  const btn = document.getElementById('vtab-bulk-delete');
+  const sa = document.getElementById('vtab-select-all');
+  if (!info || !btn) return;
+  if (checked.length > 0) {
+    info.textContent = `${checked.length} selected`;
+    info.style.display = '';
+    btn.style.display = '';
+  } else {
+    info.style.display = 'none';
+    btn.style.display = 'none';
+  }
+  if (sa) sa.indeterminate = checked.length > 0 && checked.length < all.length;
+}
+
+async function bulkDeleteVersionsTab() {
+  const checked = [...document.querySelectorAll('.vtab-checkbox:checked')];
+  if (checked.length === 0) return;
+  const versions = checked.map(c => parseInt(c.value));
+  if (!confirm(`Delete ${versions.length} version${versions.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+  const btn = document.getElementById('vtab-bulk-delete');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    await fetch(`${API}/config/versions`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ versions })
+    });
+    await renderVersionsTabContent();
+    await fetchConfigStatus();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete Selected'; }
+  }
 }
 
 function renderStatusBar() { /* removed — changes save immediately */ }
@@ -176,17 +315,23 @@ async function showVersionHistory() {
   document.getElementById('modal-content').innerHTML = `
     <h2>Version History</h2>
     <div id="versions-list" class="version-table"><span style="color:var(--text-muted)">Loading...</span></div>
-    <div class="form-actions">
+    <div class="form-actions" id="version-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     </div>
   `;
   openModal();
+  await loadVersionList();
+}
+
+async function loadVersionList() {
+  const container = document.getElementById('versions-list');
+  const actionsBar = document.getElementById('version-actions');
+  if (!container) return;
+  container.innerHTML = '<span style="color:var(--text-muted)">Loading...</span>';
 
   try {
     const res = await fetch(`${API}/config/versions`);
     const data = await res.json();
-    const container = document.getElementById('versions-list');
-    if (!container) return;
 
     if (!data.versions || data.versions.length === 0) {
       container.innerHTML = '<span style="color:var(--text-muted)">No published versions yet</span>';
@@ -195,17 +340,25 @@ async function showVersionHistory() {
 
     const current = data.currentVersion;
     container.innerHTML = `<table class="versions-table" style="width:100%; border-collapse: collapse;">
-      <tr style="border-bottom: 1px solid var(--border); font-weight: 500;">
-        <td style="padding: 8px;">Version</td>
-        <td style="padding: 8px;">Saved</td>
-        <td style="padding: 8px;">Sources</td>
-        <td style="padding: 8px; text-align: right;">Actions</td>
-      </tr>
+      <thead>
+        <tr style="border-bottom: 1px solid var(--border); font-weight: 500;">
+          <td style="padding: 8px; width: 32px;"><input type="checkbox" id="ver-select-all" title="Select all deletable" onchange="toggleSelectAllVersions(this, ${current})"></td>
+          <td style="padding: 8px;">Version</td>
+          <td style="padding: 8px;">Saved</td>
+          <td style="padding: 8px;">Sources</td>
+          <td style="padding: 8px; text-align: right;">Actions</td>
+        </tr>
+      </thead>
+      <tbody>
       ${data.versions.map(v => {
         const isCurrent = v.version === current;
         const isPinned = !!v.pinned;
+        const canDelete = !isCurrent;
         return `
         <tr style="border-bottom: 1px solid var(--border);${isCurrent ? ' background: var(--bg-hover, rgba(var(--accent-rgb,59,130,246),0.06));' : ''}">
+          <td style="padding: 8px;">
+            ${canDelete ? `<input type="checkbox" class="ver-checkbox" value="${v.version}" onchange="updateVersionBulkBar()">` : ''}
+          </td>
           <td style="padding: 8px;">
             v${v.version}
             ${isCurrent ? '<span style="margin-left:6px;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:var(--success);color:#fff;">Current</span>' : ''}
@@ -220,10 +373,62 @@ async function showVersionHistory() {
           </td>
         </tr>`;
       }).join('')}
+      </tbody>
     </table>`;
+
+    if (actionsBar) {
+      actionsBar.innerHTML = `
+        <span id="ver-bulk-info" style="color:var(--text-muted);font-size:13px;display:none"></span>
+        <button id="ver-bulk-delete-btn" class="btn btn-danger" style="display:none" onclick="bulkDeleteVersions()">Delete Selected</button>
+        <button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
+    }
   } catch (err) {
-    const container = document.getElementById('versions-list');
-    if (container) container.innerHTML = '<span style="color:var(--danger)">Failed to load versions.</span>';
+    container.innerHTML = '<span style="color:var(--danger)">Failed to load versions.</span>';
+  }
+}
+
+function toggleSelectAllVersions(cb, currentVersion) {
+  document.querySelectorAll('.ver-checkbox').forEach(c => { c.checked = cb.checked; });
+  updateVersionBulkBar();
+}
+
+function updateVersionBulkBar() {
+  const checked = [...document.querySelectorAll('.ver-checkbox:checked')];
+  const info = document.getElementById('ver-bulk-info');
+  const btn = document.getElementById('ver-bulk-delete-btn');
+  const selectAll = document.getElementById('ver-select-all');
+  const all = [...document.querySelectorAll('.ver-checkbox')];
+  if (!info || !btn) return;
+  if (checked.length > 0) {
+    info.textContent = `${checked.length} version${checked.length > 1 ? 's' : ''} selected`;
+    info.style.display = '';
+    btn.style.display = '';
+  } else {
+    info.style.display = 'none';
+    btn.style.display = 'none';
+  }
+  if (selectAll) selectAll.indeterminate = checked.length > 0 && checked.length < all.length;
+}
+
+async function bulkDeleteVersions() {
+  const checked = [...document.querySelectorAll('.ver-checkbox:checked')];
+  if (checked.length === 0) return;
+  const versions = checked.map(c => parseInt(c.value));
+  if (!confirm(`Delete ${versions.length} version${versions.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+  const btn = document.getElementById('ver-bulk-delete-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    const res = await fetch(`${API}/config/versions`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ versions })
+    });
+    const result = await res.json();
+    await loadVersionList();
+    await fetchConfigStatus();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete Selected'; }
   }
 }
 
@@ -392,135 +597,149 @@ async function togglePinVersion(version) {
   }
 }
 
-function render() {
-  const grid = document.getElementById('sources-grid');
-  const filtered = state.filter === 'all'
-    ? state.sources
-    : state.sources.filter(s => s.dataType === state.filter);
+function renderSourceCard(source) {
+  const healthClass = source.health?.status === 'green' ? 'health-green'
+    : source.health?.status === 'red' ? 'health-red'
+    : source.health?.status === 'mixed' ? 'health-mixed' : '';
+  var fileOutputCount = (source.fileOutputs || []).length;
+  var epCount = (source.endpointUrls || []).length;
+  var modeBadges = '';
+  if (fileOutputCount > 0) modeBadges += ' <span class="badge badge-ep">file' + (fileOutputCount > 1 ? ' ×' + fileOutputCount : '') + '</span>';
+  if (epCount > 1) modeBadges += ' <span class="badge badge-ep">' + epCount + ' ep</span>';
+  var healthHints = source.draftOnly
+    ? '<div class="health-draft-hint">Not published — publish to start sending</div>'
+    : '';
+  var runningStatus = source.draftOnly
+    ? '<span class="status-dot status-dot-draft"></span>Draft only'
+    : `<label class="source-run-toggle" onclick="event.stopPropagation()" title="${source.active ? 'Click to stop' : 'Click to start'}">
+         <input type="checkbox" ${source.active ? 'checked' : ''} onchange="toggleSource('${source.id}', event)">
+         <span class="source-run-slider"></span>
+         <span class="source-run-label">${source.active ? 'Running' : 'Stopped'}</span>
+       </label>`;
 
-  if (filtered.length === 0) {
-    grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 60px 0; color: var(--text-muted);">
-      <p style="font-size: 18px; margin-bottom: 8px;">No sources configured</p>
-      <p>Click "+ Add Source" to get started</p>
-    </div>`;
-    return;
-  }
-
-  grid.innerHTML = filtered.map(source => {
-    const healthClass = source.health?.status === 'green' ? 'health-green'
-      : source.health?.status === 'red' ? 'health-red'
-      : source.health?.status === 'mixed' ? 'health-mixed' : '';
-    var anyEndpointEnabled = (source.endpointUrls || []).some(ep => ep.enabled !== false);
-    var fileOutputCount = (source.fileOutputs || []).length;
-    var epCount = (source.endpointUrls || []).length;
-    var modeBadges = '';
-    if (fileOutputCount > 0) modeBadges += ' <span class="badge badge-ep">file' + (fileOutputCount > 1 ? ' ×' + fileOutputCount : '') + '</span>';
-    if (epCount > 1) modeBadges += ' <span class="badge badge-ep">' + epCount + ' ep</span>';
-    var healthHints = source.draftOnly
-      ? '<div class="health-draft-hint">Not published — publish to start sending</div>'
-      : '';
-    var runningStatus = source.draftOnly
-      ? '<span class="status-dot status-dot-draft"></span>Draft only'
-      : `<label class="source-run-toggle" onclick="event.stopPropagation()" title="${source.active ? 'Click to stop' : 'Click to start'}">
-           <input type="checkbox" ${source.active ? 'checked' : ''} onchange="toggleSource('${source.id}', event)">
-           <span class="source-run-slider"></span>
-           <span class="source-run-label">${source.active ? 'Running' : 'Stopped'}</span>
-         </label>`;
-
-    var stoppedClass = (!source.draftOnly && !source.active) ? 'source-card-stopped' : '';
-    return `
-    <div class="source-card ${healthClass} ${stoppedClass}" onclick="showEditForm('${source.id}')">
-      <div class="source-card-header">
-        <span class="source-card-title">${escHtml(source.name)}</span>
-        <div class="source-card-actions">
-          ${modeBadges}<span class="badge badge-${source.dataType}">${source.dataType}</span>
-          <div class="kebab-menu-container">
-            <button class="kebab-menu-btn" onclick="toggleKebabMenu('${source.id}', event)" title="Options">⋯${(source.health?.status === 'red' || source.health?.status === 'mixed') ? '<span class="kebab-error-dot"></span>' : ''}</button>
-            <div class="kebab-menu" id="kebab-menu-${source.id}">
-              <button class="kebab-item" onclick="showSourceDetail('${source.id}'); event.stopPropagation();">View Details</button>
-              <button class="kebab-item" onclick="showErrorLogs('${source.id}'); event.stopPropagation();">View Errors${(source.health?.status === 'red' || source.health?.status === 'mixed') ? ' <span class="kebab-error-badge">!</span>' : ''}</button>
-              <button class="kebab-item" onclick="resetSourceStats('${source.id}', event);">Reset Stats</button>
-              <button class="kebab-item" onclick="duplicateSource('${source.id}'); event.stopPropagation();">Duplicate</button>
-              <button class="kebab-item kebab-delete" onclick="deleteSourceQuick('${source.id}', event)">Delete</button>
-            </div>
+  var stoppedClass = (!source.draftOnly && !source.active) ? 'source-card-stopped' : '';
+  const isOtelApp = source.dataType === 'otelApp';
+  const typeBadge = isOtelApp
+    ? '<span class="badge badge-otel">app</span>'
+    : `<span class="badge badge-${source.dataType}">${source.dataType}</span>`;
+  const metaLine = isOtelApp
+    ? `${escHtml(source.subType)} &middot; logs &amp; traces to file &middot; every ${parseInt(source.intervalSeconds) || 0}s &middot; ${parseInt(source.volumePerInterval) || 0} rec/tick`
+    : `${escHtml(source.subType)} &middot; ${escHtml(source.format)} &middot; every ${parseInt(source.intervalSeconds) || 0}s &middot; ${parseInt(source.volumePerInterval) || 0} records`;
+  return `
+  <div class="source-card ${healthClass} ${stoppedClass}" onclick="showEditForm('${source.id}')">
+    <div class="source-card-header">
+      <span class="source-card-title">${escHtml(source.name)}</span>
+      <div class="source-card-actions">
+        ${modeBadges}${typeBadge}
+        <div class="kebab-menu-container">
+          <button class="kebab-menu-btn" onclick="toggleKebabMenu('${source.id}', event)" title="Options">⋯${(source.health?.status === 'red' || source.health?.status === 'mixed') ? '<span class="kebab-error-dot"></span>' : ''}</button>
+          <div class="kebab-menu" id="kebab-menu-${source.id}">
+            <button class="kebab-item" onclick="showSourceDetail('${source.id}'); event.stopPropagation();">View Details</button>
+            <button class="kebab-item" onclick="showErrorLogs('${source.id}'); event.stopPropagation();">View Errors${(source.health?.status === 'red' || source.health?.status === 'mixed') ? ' <span class="kebab-error-badge">!</span>' : ''}</button>
+            <button class="kebab-item" onclick="resetSourceStats('${source.id}', event);">Reset Stats</button>
+            <button class="kebab-item kebab-delete" onclick="deleteSourceQuick('${source.id}', event)">Delete</button>
           </div>
         </div>
       </div>
-      <div class="source-card-meta">
-        ${escHtml(source.subType)} &middot; ${escHtml(source.format)} &middot; every ${parseInt(source.intervalSeconds) || 0}s &middot; ${parseInt(source.volumePerInterval) || 0} records
-      </div>
-      <div class="source-card-stats">
-        <span>${runningStatus}</span>
-        <span>${formatNumber(source.stats?.messagesSent || 0)} sent</span>
-        <span>${source.stats?.errors || 0} errors</span>
-        <span>${source.stats?.lastSentAt ? timeAgo(source.stats.lastSentAt) : 'Never sent'}</span>
-        ${source.dataType === 'logs' ? `<span>${formatBytes(source.stats?.bytesSent || 0)}</span>` : ''}
-        ${source.dataType === 'traces' ? `<span>${formatNumber(source.stats?.spansSent || 0)} spans</span>` : ''}
-      </div>${healthHints}
-      <div class="source-card-footer">
-        <div class="export-toggles" onclick="event.stopPropagation()">
-          ${(source.endpointUrls || []).length > 0 ? `
-          <div class="export-toggle-section-label">HTTP Endpoints</div>
-          <div class="ep-toggles-grid">
-            ${(source.endpointUrls || []).map((ep, i) => {
-              const epHealth = ep.url
-                ? (source.health?.endpoints || []).find(h => h.url === ep.url)
-                : (source.health?.endpoints || []).find(h => h.label === ep.label);
-              const isEnabled = ep.enabled !== false;
-              let healthDot = '';
-              if (isEnabled) {
-                if (epHealth) {
-                  const cls = epHealth.status === 'green' ? 'green' : 'red';
-                  const title = epHealth.error ? escHtml(epHealth.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
-                  healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
-                } else if (source.active) {
-                  const hs = source.health?.status;
-                  const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
-                  const title = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
-                  if (cls) healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
-                }
+    </div>
+    <div class="source-card-meta">${metaLine}</div>
+    <div class="source-card-stats">
+      <span>${runningStatus}</span>
+      <span>${formatNumber(source.stats?.messagesSent || 0)} sent</span>
+      <span>${source.stats?.errors || 0} errors</span>
+      <span>${source.stats?.lastSentAt ? timeAgo(source.stats.lastSentAt) : 'Never sent'}</span>
+      ${source.dataType === 'logs' || isOtelApp ? `<span>${formatBytes(source.stats?.bytesSent || 0)}</span>` : ''}
+    </div>${healthHints}
+    <div class="source-card-footer">
+      ${!isOtelApp ? `<div class="export-toggles" onclick="event.stopPropagation()">
+        ${(source.endpointUrls || []).length > 0 ? `
+        <div class="export-toggle-section-label">HTTP Endpoints</div>
+        <div class="ep-toggles-grid">
+          ${(source.endpointUrls || []).map((ep, i) => {
+            const epHealth = ep.url
+              ? (source.health?.endpoints || []).find(h => h.url === ep.url)
+              : (source.health?.endpoints || []).find(h => h.label === ep.label);
+            const isEnabled = ep.enabled !== false;
+            let healthDot = '';
+            if (isEnabled) {
+              if (epHealth) {
+                const cls = epHealth.status === 'green' ? 'green' : 'red';
+                const title = epHealth.error ? escHtml(epHealth.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
+                healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
+              } else if (source.active) {
+                const hs = source.health?.status;
+                const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                const title = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
+                if (cls) healthDot = '<span class="toggle-health ' + cls + '" title="' + title + '"></span>';
               }
-              const label = escHtml(ep.label || 'EP' + (i + 1));
-              const checked = isEnabled ? 'checked' : '';
-              const dimmed = !isEnabled ? 'style="opacity:0.45"' : '';
-              return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + escHtml(ep.url || '') + '" ' + dimmed + '>' + label + '</span>' + healthDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + checked + ' onchange="toggleEndpoint(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
-            }).join('')}
-          </div>` : ''}
-          ${(source.fileOutputs || []).length > 0 ? `
-          ${(source.endpointUrls || []).length > 0 ? '<div class="ep-channel-divider"></div>' : ''}
-          <div class="export-toggle-section-label">Local File</div>
-          <div class="ep-toggles-grid">
-            ${(source.fileOutputs || []).map((fo, i) => {
-              const foEnabled = fo.enabled !== false;
-              const fh = fo.path
-                ? (source.health?.endpoints || []).find(e => e.url === fo.path)
-                : (source.health?.endpoints || []).find(e => e.label === (fo.label || 'File'));
-              let fhDot = '';
-              if (foEnabled) {
-                if (!fo.path) {
-                  fhDot = '<span class="toggle-health red" title="No file path configured"></span>';
-                } else if (fh) {
-                  const cls = fh.status === 'green' ? 'green' : 'red';
-                  const ftitle = fh.error ? escHtml(fh.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
-                  fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
-                } else if (source.active) {
-                  const hs = source.health?.status;
-                  const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
-                  const ftitle = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
-                  if (cls) fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
-                }
+            }
+            const label = escHtml(ep.label || 'EP' + (i + 1));
+            const checked = isEnabled ? 'checked' : '';
+            const dimmed = !isEnabled ? 'style="opacity:0.45"' : '';
+            return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + escHtml(ep.url || '') + '" ' + dimmed + '>' + label + '</span>' + healthDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + checked + ' onchange="toggleEndpoint(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
+          }).join('')}
+        </div>` : ''}
+        ${(source.fileOutputs || []).length > 0 ? `
+        ${(source.endpointUrls || []).length > 0 ? '<div class="ep-channel-divider"></div>' : ''}
+        <div class="export-toggle-section-label">Local File</div>
+        <div class="ep-toggles-grid">
+          ${(source.fileOutputs || []).map((fo, i) => {
+            const foEnabled = fo.enabled !== false;
+            const fh = fo.path
+              ? (source.health?.endpoints || []).find(e => e.url === fo.path)
+              : (source.health?.endpoints || []).find(e => e.label === (fo.label || 'File'));
+            let fhDot = '';
+            if (foEnabled) {
+              if (!fo.path) {
+                fhDot = '<span class="toggle-health red" title="No file path configured"></span>';
+              } else if (fh) {
+                const cls = fh.status === 'green' ? 'green' : 'red';
+                const ftitle = fh.error ? escHtml(fh.error) : (cls === 'red' ? 'No telemetry sent successfully' : '');
+                fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
+              } else if (source.active) {
+                const hs = source.health?.status;
+                const cls = (hs === 'red' || hs === 'mixed') ? 'red' : 'pending';
+                const ftitle = cls === 'pending' ? 'Waiting for first result…' : 'No telemetry sent successfully';
+                if (cls) fhDot = '<span class="toggle-health ' + cls + '" title="' + ftitle + '"></span>';
               }
-              const baseName = fo.path ? (fo.path.split('/').pop() || fo.path) : '';
-              const displayName = escHtml(fo.label || baseName || ('File ' + (i + 1)));
-              const foPath = escHtml(fo.path || 'No path set');
-              const dimmed = !foEnabled ? 'style="opacity:0.45"' : '';
-              return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + foPath + '" ' + dimmed + '>' + displayName + '</span>' + fhDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + (foEnabled ? 'checked' : '') + ' onchange="toggleFileOutput(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
-            }).join('')}
-          </div>` : ''}
-        </div>
-      </div>
-    </div>`;
-  }).join('');
+            }
+            const baseName = fo.path ? (fo.path.split('/').pop() || fo.path) : '';
+            const displayName = escHtml(fo.label || baseName || ('File ' + (i + 1)));
+            const foPath = escHtml(fo.path || 'No path set');
+            const dimmed = !foEnabled ? 'style="opacity:0.45"' : '';
+            return '<div class="export-toggle-item"><span class="export-toggle-label ep-name" title="' + foPath + '" ' + dimmed + '>' + displayName + '</span>' + fhDot + '<label class="toggle toggle-sm"><input type="checkbox" ' + (foEnabled ? 'checked' : '') + ' onchange="toggleFileOutput(\'' + source.id + '\',' + i + ',event)"><span class="toggle-slider"></span></label></div>';
+          }).join('')}
+        </div>` : ''}
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+function render() {
+  for (const page of ['observability', 'security', 'otel']) {
+    const pageSources = state.sources.filter(s => getSourcePage(s) === page);
+
+    if (page === 'otel') {
+      renderOtelGrid(pageSources);
+      continue;
+    }
+
+    const grid = document.getElementById(`sources-grid-${page}`);
+    if (!grid) continue;
+
+    const filtered = state.filter === 'all'
+      ? pageSources
+      : pageSources.filter(s => s.dataType === state.filter);
+
+    if (filtered.length === 0) {
+      grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 60px 0; color: var(--text-muted);">
+        <p style="font-size: 18px; margin-bottom: 8px;">No sources configured</p>
+        <p>Click "+ Add Source" to get started</p>
+      </div>`;
+    } else {
+      grid.innerHTML = filtered.map(renderSourceCard).join('');
+    }
+  }
 }
 
 
@@ -653,29 +872,318 @@ async function loadRecentLogs(id) {
   }
 }
 
-function showAddForm() {
-  document.getElementById('modal-content').innerHTML = renderForm(null);
+const SUMO_HEADERS = ['Authorization', 'X-Sumo-Category', 'X-Sumo-Host', 'X-Sumo-Name', 'X-Sumo-Fields', 'X-Sumo-Client'];
+const LEVEL_DIST_SUBTYPES = new Set(['apache', 'nginx', 'nginxOtel', 'mysqlOtel', 'kafkaOtel', 'dockerOtel', 'appJson', 'syslog', 'k8sPod', 'cloudtrail', 'microservice', 'custom', 'csiem']);
+
+const PII_TYPES = [
+  { value: 'financial', label: 'Financial (credit card, bank account, routing)' },
+  { value: 'identity', label: 'Identity (SSN, passport, drivers license, DOB)' },
+  { value: 'contact', label: 'Contact (email, phone, address, orders)' },
+  { value: 'credentials', label: 'Credentials (API keys, session tokens)' },
+  { value: 'comprehensive', label: 'Comprehensive (multi-category exports)' }
+];
+
+// ── Headers editor popup ──────────────────────────────────────────────────────
+
+let _hdrEditorCtx = null; // { type:'endpoint'|'source', el: DOMElement }
+
+function initHeadersEditorPopup() {
+  if (document.getElementById('hdr-editor-overlay')) return;
+  const div = document.createElement('div');
+  div.id = 'hdr-editor-overlay';
+  div.className = 'hdr-editor-overlay';
+  div.innerHTML = `
+    <div class="hdr-editor-popup" onclick="event.stopPropagation()">
+      <div class="hdr-editor-head">
+        <span id="hdr-editor-title">Configure Headers</span>
+        <button type="button" class="hdr-editor-close" onclick="closeHeadersEditor()">&times;</button>
+      </div>
+      <div class="hdr-editor-body">
+        <datalist id="hdr-key-suggestions">
+          ${SUMO_HEADERS.map(h => `<option value="${h}">`).join('')}
+        </datalist>
+        <div class="hdr-col-labels"><span>Header Key</span><span>Value</span><span></span></div>
+        <div id="hdr-editor-rows"></div>
+        <button type="button" class="btn btn-secondary" style="margin-top:12px" onclick="addHeaderEditorRow()">+ Add Header</button>
+      </div>
+      <div class="hdr-editor-foot">
+        <span class="hdr-editor-note" id="hdr-editor-note"></span>
+        <div style="display:flex;gap:10px">
+          <button type="button" class="btn btn-secondary" onclick="closeHeadersEditor()">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="commitHeadersEditor()">Done</button>
+        </div>
+      </div>
+    </div>`;
+  div.addEventListener('click', closeHeadersEditor);
+  document.body.appendChild(div);
+}
+
+function addHeaderEditorRow(h) {
+  h = h || { key: '', value: '' };
+  const row = document.createElement('div');
+  row.className = 'hdr-row';
+  const isSumoFields = h.key === 'X-Sumo-Fields';
+  row.innerHTML =
+    '<input type="text" class="hdr-key-input" list="hdr-key-suggestions" value="' + escHtml(h.key || '') + '" placeholder="Header name" oninput="onHdrKeyChange(this)">' +
+    '<div class="hdr-val-cell">' +
+      (isSumoFields
+        ? '<div class="hdr-fields-builder"></div>'
+        : '<input type="text" class="hdr-val-input" value="' + escHtml(h.value || '') + '" placeholder="Value">') +
+    '</div>' +
+    '<button type="button" class="hdr-row-remove" onclick="this.closest(\'.hdr-row\').remove()">&times;</button>';
+  if (isSumoFields) {
+    buildFieldsBuilder(row.querySelector('.hdr-fields-builder'), h.value || '');
+  }
+  document.getElementById('hdr-editor-rows').appendChild(row);
+  if (!h.key) row.querySelector('.hdr-key-input').focus();
+}
+
+function onHdrKeyChange(input) {
+  const row = input.closest('.hdr-row');
+  const cell = row.querySelector('.hdr-val-cell');
+  const isFields = input.value === 'X-Sumo-Fields';
+  const wasFields = !!cell.querySelector('.hdr-fields-builder');
+  if (isFields && !wasFields) {
+    cell.innerHTML = '<div class="hdr-fields-builder"></div>';
+    buildFieldsBuilder(cell.querySelector('.hdr-fields-builder'), '');
+  } else if (!isFields && wasFields) {
+    cell.innerHTML = '<input type="text" class="hdr-val-input" placeholder="Value">';
+  }
+}
+
+function buildFieldsBuilder(builderEl, value) {
+  builderEl.innerHTML =
+    '<div class="hdr-fields-rows"></div>' +
+    '<button type="button" class="hdr-add-field" onclick="addHdrFieldRow(this)">+ Add Field</button>';
+  const rowsEl = builderEl.querySelector('.hdr-fields-rows');
+  if (value) {
+    value.split(',').forEach(pair => {
+      const idx = pair.indexOf('=');
+      const k = idx >= 0 ? pair.slice(0, idx).trim() : pair.trim();
+      const v = idx >= 0 ? pair.slice(idx + 1).trim() : '';
+      if (k || v) appendFieldRow(rowsEl, k, v);
+    });
+  }
+  if (rowsEl.children.length === 0) appendFieldRow(rowsEl, '', '');
+}
+
+function appendFieldRow(rowsEl, k, v) {
+  const row = document.createElement('div');
+  row.className = 'hdr-field-row';
+  row.innerHTML =
+    '<input type="text" class="hdr-field-key" value="' + escHtml(k || '') + '" placeholder="field">' +
+    '<span class="hdr-field-eq">=</span>' +
+    '<input type="text" class="hdr-field-val" value="' + escHtml(v || '') + '" placeholder="value">' +
+    '<button type="button" class="hdr-field-remove" onclick="this.closest(\'.hdr-field-row\').remove()">&times;</button>';
+  rowsEl.appendChild(row);
+}
+
+function addHdrFieldRow(btn) {
+  const rowsEl = btn.previousElementSibling;
+  appendFieldRow(rowsEl, '', '');
+  rowsEl.lastElementChild.querySelector('.hdr-field-key').focus();
+}
+
+function openHeadersEditor(ctx, title, note) {
+  initHeadersEditorPopup();
+  _hdrEditorCtx = ctx;
+  document.getElementById('hdr-editor-title').textContent = title;
+  document.getElementById('hdr-editor-note').textContent = note || '';
+  const rowsEl = document.getElementById('hdr-editor-rows');
+  rowsEl.innerHTML = '';
+  const headers = JSON.parse(ctx.el.dataset.headers || '[]');
+  headers.forEach(h => addHeaderEditorRow(h));
+  document.getElementById('hdr-editor-overlay').classList.add('open');
+}
+
+function openEndpointHeadersEditor(btn) {
+  const row = btn.closest('.endpoint-row');
+  const label = row.querySelector('.ep-label')?.value || 'Endpoint';
+  openHeadersEditor(
+    { type: 'endpoint', el: row },
+    'Headers — ' + label,
+    'These headers are sent only for this endpoint.'
+  );
+}
+
+function openSourceHeadersEditor() {
+  const el = document.getElementById('source-headers-holder');
+  openHeadersEditor(
+    { type: 'source', el },
+    'Source Headers',
+    'Applied to all endpoints. Endpoint headers override these on the same key.'
+  );
+}
+
+function closeHeadersEditor() {
+  const overlay = document.getElementById('hdr-editor-overlay');
+  if (overlay) overlay.classList.remove('open');
+  _hdrEditorCtx = null;
+}
+
+function commitHeadersEditor() {
+  if (!_hdrEditorCtx) return;
+  const rows = document.querySelectorAll('#hdr-editor-rows .hdr-row');
+  const headers = [];
+  rows.forEach(row => {
+    const key = row.querySelector('.hdr-key-input').value.trim();
+    if (!key) return;
+    const builder = row.querySelector('.hdr-fields-builder');
+    let value;
+    if (builder) {
+      const pairs = [];
+      builder.querySelectorAll('.hdr-field-row').forEach(fr => {
+        const k = fr.querySelector('.hdr-field-key').value.trim();
+        const v = fr.querySelector('.hdr-field-val').value.trim();
+        if (k) pairs.push(v ? k + '=' + v : k);
+      });
+      value = pairs.join(',');
+    } else {
+      value = row.querySelector('.hdr-val-input')?.value || '';
+    }
+    headers.push({ key, value });
+  });
+  const ctx = _hdrEditorCtx;
+  ctx.el.dataset.headers = JSON.stringify(headers);
+  if (ctx.type === 'endpoint') {
+    const btn = ctx.el.querySelector('.btn-ep-headers');
+    if (btn) {
+      btn.textContent = headers.length > 0 ? 'Headers (' + headers.length + ')' : 'Headers';
+      btn.classList.toggle('has-headers', headers.length > 0);
+    }
+  } else {
+    updateSourceHeadersBadge(headers);
+  }
+  closeHeadersEditor();
+}
+
+function updateSourceHeadersBadge(headers) {
+  const btn = document.getElementById('source-headers-btn');
+  if (!btn) return;
+  btn.textContent = headers.length > 0 ? 'Headers (' + headers.length + ')' : 'Configure Headers';
+  btn.classList.toggle('has-headers', headers.length > 0);
+}
+
+// ── Endpoint row (simplified — headers stored in data-headers attr) ───────────
+
+function renderEndpointRow(ep, i) {
+  const headers = ep.headers || [];
+  const headersJson = escHtml(JSON.stringify(headers));
+  const hasHeaders = headers.length > 0;
+  return '<div class="endpoint-row" data-idx="' + i + '" data-headers="' + headersJson + '">' +
+    '<input type="text" class="ep-label" value="' + escHtml(ep.label || 'Endpoint') + '" placeholder="Label">' +
+    '<input type="url" class="ep-url" value="' + escHtml(ep.url || '') + '" placeholder="https://...sumologic.com/.../TOKEN">' +
+    '<label class="toggle toggle-sm"><input type="checkbox" class="ep-enabled" ' + (ep.enabled !== false ? 'checked' : '') + '><span class="toggle-slider"></span></label>' +
+    '<button type="button" class="btn-ep-headers' + (hasHeaders ? ' has-headers' : '') + '" onclick="openEndpointHeadersEditor(this)">' +
+    (hasHeaders ? 'Headers (' + headers.length + ')' : 'Headers') + '</button>' +
+    '<button type="button" class="btn-remove-ep" onclick="removeEndpoint(this)">&times;</button>' +
+    '</div>';
+}
+
+function renderLevelDistSection(source) {
+  const dataType = source?.dataType || 'logs';
+  const subType = source?.subType || '';
+  if (dataType !== 'logs') return '<div id="level-dist-section" class="hidden"></div>';
+
+  if (subType === 'pii') {
+    const selected = source?.piiTypes || PII_TYPES.map(pt => pt.value);
+    return `<div id="level-dist-section" class="form-group">
+      <label>PII Types to Include <small style="font-weight:400;color:var(--text-muted)">(uncheck to exclude)</small></label>
+      <div class="level-dist-grid" style="grid-template-columns:1fr 1fr">
+        ${PII_TYPES.map(pt => `
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 0;font-size:13px">
+            <input type="checkbox" name="pii_type_${pt.value}" ${selected.includes(pt.value) ? 'checked' : ''}>
+            ${pt.label}
+          </label>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (subType === 'csiem') {
+    const dist = source?.severityDistribution || { low: 20, medium: 40, high: 30, critical: 10 };
+    return `<div id="level-dist-section" class="form-group">
+      <label>Severity Distribution <small style="font-weight:400;color:var(--text-muted)">(relative weights)</small></label>
+      <div class="level-dist-grid">
+        <div class="level-dist-row"><span class="level-badge level-low">LOW</span><input type="number" class="level-dist-input" name="sev_low" value="${dist.low ?? 20}" min="0" max="100"></div>
+        <div class="level-dist-row"><span class="level-badge level-medium">MEDIUM</span><input type="number" class="level-dist-input" name="sev_medium" value="${dist.medium ?? 40}" min="0" max="100"></div>
+        <div class="level-dist-row"><span class="level-badge level-high">HIGH</span><input type="number" class="level-dist-input" name="sev_high" value="${dist.high ?? 30}" min="0" max="100"></div>
+        <div class="level-dist-row"><span class="level-badge level-critical">CRITICAL</span><input type="number" class="level-dist-input" name="sev_critical" value="${dist.critical ?? 10}" min="0" max="100"></div>
+      </div>
+    </div>`;
+  }
+
+  if (!LEVEL_DIST_SUBTYPES.has(subType)) return '<div id="level-dist-section" class="hidden"></div>';
+
+  const dist = source?.levelDistribution || { info: 60, warn: 15, error: 10, debug: 15 };
+  return `<div id="level-dist-section" class="form-group">
+    <label>Level Distribution <small style="font-weight:400;color:var(--text-muted)">(relative weights)</small></label>
+    <div class="level-dist-grid">
+      <div class="level-dist-row"><span class="level-badge level-info">INFO</span><input type="number" class="level-dist-input" name="lvl_info" value="${dist.info ?? 60}" min="0" max="100"></div>
+      <div class="level-dist-row"><span class="level-badge level-warn">WARN</span><input type="number" class="level-dist-input" name="lvl_warn" value="${dist.warn ?? 15}" min="0" max="100"></div>
+      <div class="level-dist-row"><span class="level-badge level-error">ERROR</span><input type="number" class="level-dist-input" name="lvl_error" value="${dist.error ?? 10}" min="0" max="100"></div>
+      <div class="level-dist-row"><span class="level-badge level-debug">DEBUG</span><input type="number" class="level-dist-input" name="lvl_debug" value="${dist.debug ?? 15}" min="0" max="100"></div>
+    </div>
+  </div>`;
+}
+
+function buildInitialSourceHeaders(source) {
+  const headers = [];
+  const added = new Set();
+  // Seed from metadata for backward compat — show X-Sumo-Category/Host at top
+  if (source?.metadata?.sourceCategory) {
+    headers.push({ key: 'X-Sumo-Category', value: source.metadata.sourceCategory });
+    added.add('X-Sumo-Category');
+  }
+  if (source?.metadata?.sourceHost) {
+    headers.push({ key: 'X-Sumo-Host', value: source.metadata.sourceHost });
+    added.add('X-Sumo-Host');
+  }
+  // Merge explicit source.headers — explicit wins on same key
+  for (const h of (source?.headers || [])) {
+    if (added.has(h.key)) {
+      const idx = headers.findIndex(x => x.key === h.key);
+      if (idx >= 0) headers[idx] = h;
+    } else {
+      headers.push(h);
+      added.add(h.key);
+    }
+  }
+  return headers;
+}
+
+function showAddForm(page) {
+  document.getElementById('modal-content').innerHTML = renderForm(null, page || null);
   openModal();
-  setupFormListeners();
+  setupFormListeners(page || null);
 }
 
 function showEditForm(id) {
   const source = state.sources.find(s => s.id === id);
-  document.getElementById('modal-content').innerHTML = renderForm(source);
+  if (!source) return;
+  if (source.dataType === 'otelApp') {
+    showOtelAppEditModal(source);
+    return;
+  }
+  document.getElementById('modal-content').innerHTML = renderForm(source, null);
   openModal();
-  setupFormListeners();
+  setupFormListeners(null);
 }
 
-function renderForm(source) {
+function renderForm(source, page) {
   const isEdit = !!source;
-  const dataType = source?.dataType || 'logs';
+  const pageDTs = page ? getPageDataTypes(page) : ['logs', 'metrics', 'traces'];
+  const dataType = source?.dataType || pageDTs[0] || 'logs';
   const httpEnabled = source?.httpEnabled !== false;
   const fileEnabled = !!source?.fileEnabled;
   const activeTab = fileEnabled && !httpEnabled ? 'file' : 'http';
+  const initialSourceHeaders = buildInitialSourceHeaders(source);
+  const subTypes = page ? getPageSubTypes(page, dataType) : SUB_TYPES[dataType];
+
+  const dtLabels = { logs: 'Logs', metrics: 'Metrics', traces: 'Traces' };
 
   return `
     <h2>${isEdit ? 'Edit Source' : 'Add New Source'}</h2>
-    <form id="source-form" data-id="${source?.id || ''}">
+    <form id="source-form" data-id="${source?.id || ''}" data-page="${page || ''}">
       <div class="form-group">
         <label>Name</label>
         <input type="text" name="name" value="${escHtml(source?.name || '')}" placeholder="My Source" required>
@@ -684,15 +1192,15 @@ function renderForm(source) {
         <div class="form-group">
           <label>Data Type</label>
           <select name="dataType" id="form-dataType">
-            <option value="logs" ${dataType === 'logs' ? 'selected' : ''}>Logs</option>
-            <option value="metrics" ${dataType === 'metrics' ? 'selected' : ''}>Metrics</option>
-            <option value="traces" ${dataType === 'traces' ? 'selected' : ''}>Traces</option>
+            ${pageDTs.map(dt =>
+              `<option value="${dt}" ${dataType === dt ? 'selected' : ''}>${dtLabels[dt]}</option>`
+            ).join('')}
           </select>
         </div>
         <div class="form-group">
           <label>Sub Type</label>
           <select name="subType" id="form-subType">
-            ${SUB_TYPES[dataType].map(st =>
+            ${subTypes.map(st =>
               `<option value="${st.value}" ${source?.subType === st.value ? 'selected' : ''}>${st.label}</option>`
             ).join('')}
           </select>
@@ -716,24 +1224,25 @@ function renderForm(source) {
         <div class="form-group">
           <label>Endpoints</label>
           <div id="endpoints-list">
-            ${(source?.endpointUrls || [{ url: '', label: 'Primary', enabled: true }]).map((ep, i) =>
-              '<div class="endpoint-row" data-idx="' + i + '">' +
-              '<input type="text" class="ep-label" value="' + escHtml(ep.label || 'Endpoint') + '" placeholder="Label">' +
-              '<input type="url" class="ep-url" value="' + escHtml(ep.url || '') + '" placeholder="https://...sumologic.com/.../TOKEN">' +
-              '<label class="toggle toggle-sm"><input type="checkbox" class="ep-enabled" ' + (ep.enabled !== false ? 'checked' : '') + '><span class="toggle-slider"></span></label>' +
-              '<button type="button" class="btn-remove-ep" onclick="removeEndpoint(this)">&times;</button>' +
-              '</div>'
+            ${(source?.endpointUrls || [{ url: '', label: 'Primary', enabled: true, headers: [] }]).map((ep, i) =>
+              renderEndpointRow(ep, i)
             ).join('')}
           </div>
           <button type="button" class="btn btn-secondary btn-sm" onclick="addEndpoint()">+ Add Endpoint</button>
         </div>
         <div class="form-group">
-          <label>Source Category</label>
-          <input type="text" name="sourceCategory" value="${escHtml(source?.metadata?.sourceCategory || '')}" placeholder="prod/web/apache">
-        </div>
-        <div class="form-group">
-          <label>Source Host</label>
-          <input type="text" name="sourceHost" value="${escHtml(source?.metadata?.sourceHost || '')}" placeholder="web-01.example.com">
+          <div class="source-headers-bar">
+            <div>
+              <div class="source-headers-label">Source-Level Headers</div>
+              <div class="source-headers-hint">Applied to all endpoints. Use X-Sumo-Category / X-Sumo-Host here. Per-endpoint headers override on same key.</div>
+            </div>
+            <button type="button" id="source-headers-btn"
+              class="btn-ep-headers${initialSourceHeaders.length > 0 ? ' has-headers' : ''}"
+              onclick="openSourceHeadersEditor()">
+              ${initialSourceHeaders.length > 0 ? 'Headers (' + initialSourceHeaders.length + ')' : 'Configure Headers'}
+            </button>
+          </div>
+          <div id="source-headers-holder" data-headers="${escHtml(JSON.stringify(initialSourceHeaders))}"></div>
         </div>
       </div>
 
@@ -781,6 +1290,7 @@ function renderForm(source) {
           <input type="number" name="volumePerInterval" value="${source?.volumePerInterval || 50}" min="1" max="10000">
         </div>
       </div>`}
+      ${renderLevelDistSection(source)}
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary">${isEdit ? 'Save' : 'Add Source'}</button>
@@ -789,20 +1299,70 @@ function renderForm(source) {
   `;
 }
 
-function setupFormListeners() {
+function setupFormListeners(page) {
   const dataTypeSelect = document.getElementById('form-dataType');
   const subTypeSelect = document.getElementById('form-subType');
   const formatSelect = document.getElementById('form-format');
 
+  function updateLevelDistSection() {
+    const dt = dataTypeSelect.value;
+    const st = subTypeSelect.value;
+    const section = document.getElementById('level-dist-section');
+    if (!section) return;
+    if (dt !== 'logs') {
+      section.className = 'hidden';
+      section.innerHTML = '';
+      return;
+    }
+    if (st === 'pii') {
+      section.className = 'form-group';
+      section.innerHTML = '<label>PII Types to Include <small style="font-weight:400;color:var(--text-muted)">(uncheck to exclude)</small></label>' +
+        '<div class="level-dist-grid" style="grid-template-columns:1fr 1fr">' +
+        PII_TYPES.map(pt =>
+          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 0;font-size:13px">' +
+          '<input type="checkbox" name="pii_type_' + pt.value + '" checked>' + pt.label + '</label>'
+        ).join('') + '</div>';
+      return;
+    }
+    if (st === 'csiem') {
+      section.className = 'form-group';
+      section.innerHTML = '<label>Severity Distribution <small style="font-weight:400;color:var(--text-muted)">(relative weights)</small></label>' +
+        '<div class="level-dist-grid">' +
+        '<div class="level-dist-row"><span class="level-badge level-low">LOW</span><input type="number" class="level-dist-input" name="sev_low" value="20" min="0" max="100"></div>' +
+        '<div class="level-dist-row"><span class="level-badge level-medium">MEDIUM</span><input type="number" class="level-dist-input" name="sev_medium" value="40" min="0" max="100"></div>' +
+        '<div class="level-dist-row"><span class="level-badge level-high">HIGH</span><input type="number" class="level-dist-input" name="sev_high" value="30" min="0" max="100"></div>' +
+        '<div class="level-dist-row"><span class="level-badge level-critical">CRITICAL</span><input type="number" class="level-dist-input" name="sev_critical" value="10" min="0" max="100"></div>' +
+        '</div>';
+      return;
+    }
+    if (!LEVEL_DIST_SUBTYPES.has(st)) {
+      section.className = 'hidden';
+      section.innerHTML = '';
+      return;
+    }
+    section.className = 'form-group';
+    section.innerHTML = '<label>Level Distribution <small style="font-weight:400;color:var(--text-muted)">(relative weights)</small></label>' +
+      '<div class="level-dist-grid">' +
+      '<div class="level-dist-row"><span class="level-badge level-info">INFO</span><input type="number" class="level-dist-input" name="lvl_info" value="60" min="0" max="100"></div>' +
+      '<div class="level-dist-row"><span class="level-badge level-warn">WARN</span><input type="number" class="level-dist-input" name="lvl_warn" value="15" min="0" max="100"></div>' +
+      '<div class="level-dist-row"><span class="level-badge level-error">ERROR</span><input type="number" class="level-dist-input" name="lvl_error" value="10" min="0" max="100"></div>' +
+      '<div class="level-dist-row"><span class="level-badge level-debug">DEBUG</span><input type="number" class="level-dist-input" name="lvl_debug" value="15" min="0" max="100"></div>' +
+      '</div>';
+  }
+
   dataTypeSelect.addEventListener('change', () => {
     const dt = dataTypeSelect.value;
-    subTypeSelect.innerHTML = SUB_TYPES[dt].map(st =>
+    const sts = page ? getPageSubTypes(page, dt) : SUB_TYPES[dt];
+    subTypeSelect.innerHTML = sts.map(st =>
       `<option value="${st.value}">${st.label}</option>`
     ).join('');
     formatSelect.innerHTML = FORMATS[dt].map(f =>
       `<option value="${f.value}">${f.label}</option>`
     ).join('');
+    updateLevelDistSection();
   });
+
+  subTypeSelect.addEventListener('change', updateLevelDistSection);
 
   document.querySelectorAll('.cfg-tab').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -821,12 +1381,15 @@ function setupFormListeners() {
     const id = form.dataset.id || null;
     const endpointUrls = [];
     document.querySelectorAll('#endpoints-list .endpoint-row').forEach(row => {
+      const headers = JSON.parse(row.dataset.headers || '[]');
       endpointUrls.push({
         label: row.querySelector('.ep-label').value || 'Endpoint',
         url: row.querySelector('.ep-url').value,
-        enabled: row.querySelector('.ep-enabled').checked
+        enabled: row.querySelector('.ep-enabled').checked,
+        headers
       });
     });
+    const sourceHeaders = JSON.parse(document.getElementById('source-headers-holder')?.dataset.headers || '[]');
     const fileOutputs = [];
     document.querySelectorAll('#file-outputs-list .endpoint-row').forEach(row => {
       fileOutputs.push({
@@ -835,10 +1398,37 @@ function setupFormListeners() {
         enabled: row.querySelector('.fo-enabled').checked
       });
     });
+    const subType = form.elements['subType'].value;
+    const dataType = form.elements['dataType'].value;
+    let levelDistribution = null;
+    let severityDistribution = null;
+    let piiTypes = null;
+    if (dataType === 'logs') {
+      if (subType === 'csiem') {
+        severityDistribution = {
+          low: parseInt(form.elements['sev_low']?.value) || 0,
+          medium: parseInt(form.elements['sev_medium']?.value) || 0,
+          high: parseInt(form.elements['sev_high']?.value) || 0,
+          critical: parseInt(form.elements['sev_critical']?.value) || 0
+        };
+      } else if (subType === 'pii') {
+        piiTypes = PII_TYPES
+          .filter(pt => form.elements[`pii_type_${pt.value}`]?.checked)
+          .map(pt => pt.value);
+        if (piiTypes.length === 0) piiTypes = PII_TYPES.map(pt => pt.value);
+      } else if (LEVEL_DIST_SUBTYPES.has(subType)) {
+        levelDistribution = {
+          info: parseInt(form.elements['lvl_info']?.value) || 0,
+          warn: parseInt(form.elements['lvl_warn']?.value) || 0,
+          error: parseInt(form.elements['lvl_error']?.value) || 0,
+          debug: parseInt(form.elements['lvl_debug']?.value) || 0
+        };
+      }
+    }
     const formData = {
       name: form.elements['name'].value,
-      dataType: form.elements['dataType'].value,
-      subType: form.elements['subType'].value,
+      dataType,
+      subType,
       format: form.elements['format'].value,
       fileOutputs,
       filePath: fileOutputs[0]?.path || '',
@@ -846,9 +1436,13 @@ function setupFormListeners() {
       intervalSeconds: parseInt(form.intervalSeconds.value),
       volumePerInterval: parseInt(form.volumePerInterval.value),
       metadata: {
-        sourceCategory: form.sourceCategory?.value || '',
-        sourceHost: form.sourceHost?.value || ''
-      }
+        sourceCategory: sourceHeaders.find(h => h.key === 'X-Sumo-Category')?.value || '',
+        sourceHost: sourceHeaders.find(h => h.key === 'X-Sumo-Host')?.value || ''
+      },
+      ...(levelDistribution ? { levelDistribution } : {}),
+      ...(severityDistribution ? { severityDistribution } : {}),
+      ...(piiTypes ? { piiTypes } : {}),
+      headers: sourceHeaders
     };
     saveSource(formData, id);
   });
@@ -857,14 +1451,10 @@ function setupFormListeners() {
 function addEndpoint() {
   var list = document.getElementById('endpoints-list');
   var idx = list.children.length;
-  var row = document.createElement('div');
-  row.className = 'endpoint-row';
-  row.dataset.idx = idx;
-  row.innerHTML = '<input type="text" class="ep-label" value="Endpoint ' + (idx + 1) + '" placeholder="Label">' +
-    '<input type="url" class="ep-url" value="" placeholder="https://...sumologic.com/.../TOKEN" required>' +
-    '<label class="toggle toggle-sm"><input type="checkbox" class="ep-enabled" checked><span class="toggle-slider"></span></label>' +
-    '<button type="button" class="btn-remove-ep" onclick="removeEndpoint(this)">&times;</button>';
-  list.appendChild(row);
+  var ep = { label: 'Endpoint ' + (idx + 1), url: '', enabled: true, headers: [] };
+  var wrapper = document.createElement('div');
+  wrapper.innerHTML = renderEndpointRow(ep, idx);
+  list.appendChild(wrapper.firstElementChild);
 }
 
 function removeEndpoint(btn) {
@@ -874,6 +1464,7 @@ function removeEndpoint(btn) {
     row.remove();
   }
 }
+
 
 function addFileOutput() {
   var list = document.getElementById('file-outputs-list');
@@ -1067,6 +1658,8 @@ function switchTab(tab) {
     el.classList.toggle('hidden', el.id !== `tab-${tab}`);
   });
   if (tab === 'settings') renderSettingsPage();
+  if (tab === 'versions') renderVersionsTabContent();
+  pushUrlState();
 }
 
 async function fetchSettings() {
@@ -1102,8 +1695,6 @@ async function saveSettings(updates) {
 function applySettingsToUI() {
   const name = state.settings.appName || 'Telemetry Generator';
   document.title = name;
-  const titleEl = document.getElementById('app-title');
-  if (titleEl) titleEl.textContent = name;
   const sidebarName = document.getElementById('sidebar-app-name');
   if (sidebarName) sidebarName.textContent = name;
 }
@@ -1197,6 +1788,901 @@ function renderSettingsPage() {
   });
 }
 
+// ── OTel app edit modal (tabbed: Settings | OTel Collector Config) ────────────
+
+function showOtelAppEditModal(source) {
+  const info = OTEL_APP_SUBTYPES.find(o => o.value === source.subType) || OTEL_APP_SUBTYPES[0];
+
+  const pathRows = (info.signals || []).map(sig => {
+    const pathText = escHtml(sig.filePath || sig.displayPath || '');
+    const note = (!sig.filePath && !sig.displayPath) ? '<span class="otel-info-note">always live (metricsServer)</span>' : '';
+    return `<div class="otel-path-row">
+      <span class="badge badge-${sig.dataType}">${sig.dataType}</span>
+      ${sig.label ? `<span class="otel-path-label">${escHtml(sig.label)}</span>` : ''}
+      <code class="otel-path-value">${pathText}</code>
+      ${note}
+    </div>`;
+  }).join('');
+
+  document.getElementById('modal-content').innerHTML = `
+    <h2>${escHtml(info.label)} — OTel App</h2>
+    <div class="modal-tabs">
+      <button class="modal-tab active" onclick="switchModalTab('otel-settings', this)">Settings</button>
+      <button class="modal-tab" onclick="switchModalTab('otel-collector-cfg', this)">OTel Collector Config</button>
+    </div>
+
+    <div id="modal-tab-otel-settings" class="modal-tab-content">
+      <form id="otel-edit-form">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" value="${escHtml(source.name)}" required>
+        </div>
+        ${state.settings.overrideEnabled ? `
+        <div class="form-override-notice">
+          <span class="form-override-icon">⚙</span>
+          Global override is enforced — interval and volume are controlled by Settings.
+          <span class="form-override-values">Effective: ${state.settings.globalIntervalSeconds}s interval · ${state.settings.globalVolumePerInterval} records/tick</span>
+        </div>
+        <div class="form-row form-row-disabled">
+          <div class="form-group">
+            <label>Interval (seconds)</label>
+            <input type="number" name="intervalSeconds" value="${source.intervalSeconds || 10}" min="1" max="3600" disabled readonly>
+          </div>
+          <div class="form-group">
+            <label>Volume (records / tick)</label>
+            <input type="number" name="volumePerInterval" value="${source.volumePerInterval || 50}" min="1" max="10000" disabled readonly>
+          </div>
+        </div>` : `
+        <div class="form-row">
+          <div class="form-group">
+            <label>Interval (seconds)</label>
+            <input type="number" name="intervalSeconds" value="${source.intervalSeconds || 10}" min="1" max="3600">
+          </div>
+          <div class="form-group">
+            <label>Volume (records / tick)</label>
+            <input type="number" name="volumePerInterval" value="${source.volumePerInterval || 50}" min="1" max="10000">
+          </div>
+        </div>`}
+        <div class="otel-section">
+          <div class="otel-section-header">
+            <span class="otel-section-title">Output paths</span>
+            <span class="otel-section-desc">Fixed standard paths — logs and traces written to file; metrics served on Prometheus port.</span>
+          </div>
+          <div class="otel-path-rows">${pathRows}</div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="button" class="btn btn-danger" onclick="deleteSourceQuick('${source.id}', event)">Delete</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="modal-tab-otel-collector-cfg" class="modal-tab-content hidden">
+      ${renderOtelConfigTab(info, source)}
+    </div>`;
+
+  openModal();
+
+  document.getElementById('otel-edit-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const updates = {
+      name: form.elements['name'].value.trim(),
+      intervalSeconds: parseInt(form.elements['intervalSeconds'].value) || 10,
+      volumePerInterval: parseInt(form.elements['volumePerInterval'].value) || 50
+    };
+    try {
+      const resp = await fetch(`${API}/sources/${source.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...source, ...updates })
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      closeModal();
+      await fetchSources();
+    } catch (err) {
+      alert('Failed to save: ' + err.message);
+    }
+  });
+}
+
+function switchModalTab(tabId, btn) {
+  btn.closest('.modal-tabs').querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  const panel = btn.closest('.modal-content-wrapper, #modal-content');
+  panel.querySelectorAll('.modal-tab-content').forEach(c => c.classList.add('hidden'));
+  document.getElementById(`modal-tab-${tabId}`)?.classList.remove('hidden');
+}
+
+async function copyOtelConfig(subType, btn) {
+  const info = OTEL_APP_SUBTYPES.find(o => o.value === subType);
+  if (!info) return;
+  const pre = document.getElementById('otel-cfg-pre');
+  const configType = pre?.dataset.configType || 'self';
+  const config = (configType === 'managed' && info.sumoConfigManaged) ? info.sumoConfigManaged : info.sumoConfig;
+  if (!config) return;
+  try {
+    await navigator.clipboard.writeText(config);
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (_) {
+    alert('Copy failed — select the text manually.');
+  }
+}
+
+function renderOtelConfigTab(info, source) {
+  const hasManaged = !!info.sumoConfigManaged;
+  const defaultType = hasManaged ? 'managed' : 'self';
+  const defaultConfig = hasManaged ? info.sumoConfigManaged : info.sumoConfig;
+
+  const toggleHtml = hasManaged ? `
+    <div class="config-type-toggle">
+      <button class="config-type-btn${defaultType === 'self' ? ' active' : ''}" onclick="switchOtelConfigType('self', this, '${source.subType}')">Self-Managed</button>
+      <button class="config-type-btn${defaultType === 'managed' ? ' active' : ''}" onclick="switchOtelConfigType('managed', this, '${source.subType}')">Remotely Managed</button>
+    </div>` : '';
+
+  const introHtml = hasManaged
+    ? `<p class="otel-config-intro" id="otel-cfg-intro">Remotely managed — exporter is <code>sumologic</code>, routing handled by the Sumo Logic extension.</p>`
+    : `<p class="otel-config-intro">Apply this to your Sumo Logic OTel Collector to ingest all ${escHtml(info.label)} telemetry.</p>`;
+
+  const correlationHtml = info.correlationNotes ? renderCorrelationNotes(info.correlationNotes) : '';
+
+  return `${toggleHtml}
+    <div class="otel-config-toolbar">
+      ${introHtml}
+      <button class="btn btn-secondary btn-sm" onclick="copyOtelConfig('${source.subType}', this)">Copy YAML</button>
+    </div>
+    <div class="otel-collector-config">
+      <div class="otel-config-label">otel-collector-config.yaml</div>
+      <pre class="otel-config-pre" id="otel-cfg-pre" data-config-type="${defaultType}">${escHtml(defaultConfig || '')}</pre>
+    </div>
+    ${correlationHtml}`;
+}
+
+function renderCorrelationNotes(notes) {
+  const rows = notes.map(n => {
+    const cls = n.status === 'full' ? 'corr-full' : n.status === 'partial' ? 'corr-partial' : 'corr-none';
+    const icon = n.status === 'full' ? '✓' : n.status === 'partial' ? '~' : '✗';
+    return `<tr>
+      <td><span class="corr-icon ${cls}">${icon}</span> ${escHtml(n.pair)}</td>
+      <td class="corr-note">${escHtml(n.note)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="correlation-section">
+    <div class="correlation-title">Signal Correlation</div>
+    <table class="correlation-table">
+      <thead><tr><th>Signal Pair</th><th>How Correlated</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function switchOtelConfigType(type, btn, subType) {
+  const info = OTEL_APP_SUBTYPES.find(o => o.value === subType);
+  if (!info) return;
+  const config = type === 'managed' ? info.sumoConfigManaged : info.sumoConfig;
+  const pre = document.getElementById('otel-cfg-pre');
+  if (pre) { pre.textContent = config || ''; pre.dataset.configType = type; }
+  btn.closest('.config-type-toggle').querySelectorAll('.config-type-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const intro = document.getElementById('otel-cfg-intro');
+  if (intro) {
+    intro.innerHTML = type === 'managed'
+      ? `Remotely managed — exporter is <code>sumologic</code>, routing handled by the Sumo Logic extension.`
+      : `Apply this to your Sumo Logic OTel Collector to ingest all ${escHtml(info.label)} telemetry.`;
+  }
+}
+
+// ── OTel multi-signal form ────────────────────────────────────────────────────
+
+const OTEL_APP_SUBTYPES = [
+  {
+    value: 'nginxOtel',
+    label: 'Nginx',
+    metricsPort: 9113,
+    signals: [
+      { dataType: 'logs',    filePath: '/tmp/otel/nginx/access.log',   label: 'Access log' },
+      { dataType: 'logs',    filePath: '/tmp/otel/nginx/error.log',    label: 'Error log' },
+      { dataType: 'traces',  filePath: '/tmp/otel/nginx-traces.json', label: 'Traces' },
+      { dataType: 'metrics', filePath: null, displayPath: 'http://localhost:9113/nginx_status', label: 'nginx stub_status' }
+    ],
+    sumoConfig: `# Sumo Logic OTel Collector config for Nginx
+# Replace SUMOLOGIC_INSTALLATION_TOKEN with your token
+# Docs: https://help.sumologic.com/docs/send-data/opentelemetry-collector/
+
+extensions:
+  sumologic:
+    installation_token: \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+receivers:
+  filelog/nginx_access:
+    include: [/tmp/otel/nginx/access.log]
+    operators:
+      - type: regex_parser
+        regex: '^(?P<remote_addr>\\S+) \\S+ (?P<user>\\S+) \\[(?P<time_local>[^\\]]+)\\] "(?P<method>\\S+) (?P<path>\\S+) (?P<protocol>[^"]+)" (?P<status>\\d+) (?P<bytes_sent>\\d+)'
+        timestamp:
+          parse_from: attributes.time_local
+          layout: '02/Jan/2006:15:04:05 -0700'
+        severity:
+          parse_from: attributes.status
+          mapping:
+            error2: 5xx
+            error: 4xx
+            warn: 3xx
+    resource:
+      service.name: nginx
+      _sourceCategory: prod/nginx/access
+
+  filelog/nginx_error:
+    include: [/tmp/otel/nginx/error.log]
+    resource:
+      service.name: nginx
+      _sourceCategory: prod/nginx/error
+
+  nginx:
+    endpoint: http://localhost:9113/nginx_status
+    collection_interval: 10s
+
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+exporters:
+  otlphttp/sumologic:
+    endpoint: https://open-collectors.sumologic.com/otlp
+    headers:
+      Authorization: Bearer \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+service:
+  extensions: [sumologic]
+  pipelines:
+    logs/access:
+      receivers: [filelog/nginx_access]
+      exporters: [otlphttp/sumologic]
+    logs/error:
+      receivers: [filelog/nginx_error]
+      exporters: [otlphttp/sumologic]
+    metrics:
+      receivers: [nginx]
+      exporters: [otlphttp/sumologic]
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/sumologic]`
+  },
+  {
+    value: 'mysqlOtel',
+    label: 'MySQL',
+    metricsPort: 9104,
+    signals: [
+      { dataType: 'logs',    filePath: '/tmp/otel/mysql/error.log',    label: 'Error log' },
+      { dataType: 'traces',  filePath: '/tmp/otel/mysql-traces.json', label: 'Traces' },
+      { dataType: 'metrics', filePath: null, displayPath: 'http://localhost:9104/metrics', label: 'Prometheus scrape' }
+    ],
+    sumoConfig: `# Sumo Logic OTel Collector config for MySQL
+# Replace SUMOLOGIC_INSTALLATION_TOKEN with your token
+# Docs: https://help.sumologic.com/docs/send-data/opentelemetry-collector/
+
+extensions:
+  sumologic:
+    installation_token: \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+receivers:
+  filelog/mysql_error:
+    include: [/tmp/otel/mysql/error.log]
+    operators:
+      - type: regex_parser
+        regex: '^(?P<timestamp>\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z) (?P<thread>\\d+) \\[(?P<level>[^\\]]+)\\] (?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '2006-01-02T15:04:05.999999Z'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: ERROR
+            warn: Warning
+            info: Note
+    resource:
+      service.name: mysql
+      _sourceCategory: prod/mysql/error
+
+  filelog/mysql_slow:
+    include: [/tmp/otel/mysql/slow.log]
+    resource:
+      service.name: mysql
+      _sourceCategory: prod/mysql/slowquery
+
+  prometheus/mysql:
+    config:
+      scrape_configs:
+        - job_name: mysqld-exporter
+          static_configs:
+            - targets: ['localhost:9104']
+
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+exporters:
+  otlphttp/sumologic:
+    endpoint: https://open-collectors.sumologic.com/otlp
+    headers:
+      Authorization: Bearer \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+service:
+  extensions: [sumologic]
+  pipelines:
+    logs/error:
+      receivers: [filelog/mysql_error]
+      exporters: [otlphttp/sumologic]
+    logs/slow:
+      receivers: [filelog/mysql_slow]
+      exporters: [otlphttp/sumologic]
+    metrics:
+      receivers: [prometheus/mysql]
+      exporters: [otlphttp/sumologic]
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/sumologic]`
+  },
+  {
+    value: 'kafkaOtel',
+    label: 'Kafka',
+    metricsPort: 9092,
+    signals: [
+      { dataType: 'logs',    filePath: '/tmp/otel/kafka/server.log',     label: 'Server log' },
+      { dataType: 'logs',    filePath: '/tmp/otel/kafka/controller.log', label: 'Controller log' },
+      { dataType: 'traces',  filePath: '/tmp/otel/kafka-traces.json',    label: 'Traces' },
+      { dataType: 'metrics', filePath: null, displayPath: 'localhost:9092', label: 'Kafka broker (wire protocol)' }
+    ],
+    sumoConfig: `# Sumo Logic OTel Collector config for Kafka
+# Replace SUMOLOGIC_INSTALLATION_TOKEN with your token
+# Docs: https://help.sumologic.com/docs/send-data/opentelemetry-collector/
+
+extensions:
+  sumologic:
+    installation_token: \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+receivers:
+  filelog/kafka_server:
+    include: [/tmp/otel/kafka/server.log]
+    operators:
+      - type: regex_parser
+        regex: '^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3})\\] (?P<level>\\w+) (?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '2006-01-02 15:04:05,000'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: ERROR
+            warn: WARN
+            info: INFO
+            debug: DEBUG
+    resource:
+      service.name: kafka
+      _sourceCategory: prod/kafka/server
+
+  filelog/kafka_controller:
+    include: [/tmp/otel/kafka/controller.log]
+    operators:
+      - type: regex_parser
+        regex: '^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3})\\] (?P<level>\\w+) (?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '2006-01-02 15:04:05,000'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: ERROR
+            warn: WARN
+            info: INFO
+            debug: DEBUG
+    resource:
+      service.name: kafka
+      _sourceCategory: prod/kafka/controller
+
+  kafkametrics:
+    brokers: [localhost:9092]
+    protocol_version: 2.0.0
+    scrapers:
+      - brokers
+      - topics
+      - consumers
+
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+exporters:
+  otlphttp/sumologic:
+    endpoint: https://open-collectors.sumologic.com/otlp
+    headers:
+      Authorization: Bearer \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+service:
+  extensions: [sumologic]
+  pipelines:
+    logs/server:
+      receivers: [filelog/kafka_server]
+      exporters: [otlphttp/sumologic]
+    logs/controller:
+      receivers: [filelog/kafka_controller]
+      exporters: [otlphttp/sumologic]
+    metrics:
+      receivers: [kafkametrics]
+      exporters: [otlphttp/sumologic]
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/sumologic]`,
+    sumoConfigManaged: `# Sumo Logic OTel Collector — Remotely Managed — Kafka
+# Install: https://help.sumologic.com/docs/send-data/opentelemetry-collector/install-collector/
+# Token is provided during installation; no endpoint URL needed here.
+
+extensions:
+  sumologic:
+    installation_token: \${env:SUMOLOGIC_INSTALLATION_TOKEN}
+    collector_name: kafka-otel-demo
+
+receivers:
+  filelog/kafka_server:
+    include: [/tmp/otel/kafka/server.log]
+    start_at: beginning
+    operators:
+      - type: regex_parser
+        regex: '^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3})\\] (?P<level>\\w+) (?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '2006-01-02 15:04:05,000'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: ERROR
+            warn: WARN
+            info: INFO
+            debug: DEBUG
+
+  filelog/kafka_controller:
+    include: [/tmp/otel/kafka/controller.log]
+    start_at: beginning
+    operators:
+      - type: regex_parser
+        regex: '^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3})\\] (?P<level>\\w+) (?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '2006-01-02 15:04:05,000'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: ERROR
+            warn: WARN
+            info: INFO
+            debug: DEBUG
+
+  kafkametrics:
+    brokers: [localhost:9092]
+    protocol_version: 2.0.0
+    scrapers:
+      - brokers
+      - topics
+      - consumers
+
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+processors:
+  resource/kafka:
+    attributes:
+      - action: upsert
+        key: service.name
+        value: kafka
+      - action: upsert
+        key: deployment.environment
+        value: production
+
+  resourcedetection/system:
+    detectors: [system, env]
+    timeout: 5s
+    override: false
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+exporters:
+  sumologic:
+
+service:
+  extensions: [sumologic]
+  pipelines:
+    logs/kafka_server:
+      receivers: [filelog/kafka_server]
+      processors: [resource/kafka, resourcedetection/system, batch]
+      exporters: [sumologic]
+    logs/kafka_controller:
+      receivers: [filelog/kafka_controller]
+      processors: [resource/kafka, resourcedetection/system, batch]
+      exporters: [sumologic]
+    metrics/kafka:
+      receivers: [kafkametrics]
+      processors: [resource/kafka, resourcedetection/system, batch]
+      exporters: [sumologic]
+    traces/kafka:
+      receivers: [otlp]
+      processors: [resource/kafka, resourcedetection/system, batch]
+      exporters: [sumologic]`,
+    correlationNotes: [
+      { pair: 'Logs ↔ Metrics',  status: 'full',    note: 'service.name=kafka + host.name (via resourcedetection) links broker logs to kafkametrics broker/topic/consumer data' },
+      { pair: 'Logs ↔ Traces',   status: 'partial', note: 'service.name matches; broker logs lack trace_id — only OTel-instrumented client spans carry trace context' },
+      { pair: 'Metrics ↔ Traces', status: 'full',   note: 'service.name=kafka + host.name bridges broker metrics to producer/consumer spans' },
+    ]
+  },
+  {
+    value: 'dockerOtel',
+    label: 'Docker',
+    metricsPort: 2375,
+    signals: [
+      { dataType: 'logs',    filePath: '/tmp/otel/docker/daemon.log',  label: 'Daemon log' },
+      { dataType: 'traces',  filePath: '/tmp/otel/docker-traces.json', label: 'Traces' },
+      { dataType: 'metrics', filePath: null, displayPath: 'http://localhost:2375', label: 'Docker API (docker_stats)' }
+    ],
+    sumoConfig: `# Sumo Logic OTel Collector config for Docker
+# Replace SUMOLOGIC_INSTALLATION_TOKEN with your token
+# Docs: https://help.sumologic.com/docs/send-data/opentelemetry-collector/
+
+extensions:
+  sumologic:
+    installation_token: \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+receivers:
+  filelog/docker_daemon:
+    include: [/tmp/otel/docker/daemon.log]
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: '2006-01-02T15:04:05.999999999Z'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: error
+            warn: warning
+            info: info
+            debug: debug
+    resource:
+      service.name: docker
+      _sourceCategory: prod/docker/daemon
+
+  docker_stats:
+    endpoint: http://localhost:2375
+    collection_interval: 20s
+    api_version: 1.24
+    timeout: 20s
+
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+exporters:
+  otlphttp/sumologic:
+    endpoint: https://open-collectors.sumologic.com/otlp
+    headers:
+      Authorization: Bearer \${SUMOLOGIC_INSTALLATION_TOKEN}
+
+service:
+  extensions: [sumologic]
+  pipelines:
+    logs/daemon:
+      receivers: [filelog/docker_daemon]
+      exporters: [otlphttp/sumologic]
+    metrics:
+      receivers: [docker_stats]
+      exporters: [otlphttp/sumologic]
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/sumologic]`,
+    sumoConfigManaged: `# Sumo Logic OTel Collector — Remotely Managed — Docker
+# Install: https://help.sumologic.com/docs/send-data/opentelemetry-collector/install-collector/
+# Token is provided during installation; no endpoint URL needed here.
+
+extensions:
+  sumologic:
+    installation_token: \${env:SUMOLOGIC_INSTALLATION_TOKEN}
+    collector_name: docker-otel-demo
+
+receivers:
+  filelog/docker_daemon:
+    include: [/tmp/otel/docker/daemon.log]
+    start_at: beginning
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: '2006-01-02T15:04:05.999999999Z'
+        severity:
+          parse_from: attributes.level
+          mapping:
+            error: error
+            warn: warning
+            info: info
+            debug: debug
+      - type: move
+        from: attributes.msg
+        to: body
+
+  docker_stats:
+    endpoint: http://localhost:2375
+    collection_interval: 20s
+    api_version: 1.24
+    timeout: 20s
+
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+processors:
+  resource/docker:
+    attributes:
+      - action: upsert
+        key: service.name
+        value: docker
+      - action: upsert
+        key: deployment.environment
+        value: production
+
+  resourcedetection/system:
+    detectors: [system, env, docker]
+    timeout: 5s
+    override: false
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+exporters:
+  sumologic:
+
+service:
+  extensions: [sumologic]
+  pipelines:
+    logs/docker:
+      receivers: [filelog/docker_daemon]
+      processors: [resource/docker, resourcedetection/system, batch]
+      exporters: [sumologic]
+    metrics/docker:
+      receivers: [docker_stats]
+      processors: [resource/docker, resourcedetection/system, batch]
+      exporters: [sumologic]
+    traces/docker:
+      receivers: [otlp]
+      processors: [resource/docker, resourcedetection/system, batch]
+      exporters: [sumologic]`,
+    correlationNotes: [
+      { pair: 'Logs ↔ Metrics',   status: 'full',    note: 'service.name=docker + container.name (from docker_stats labels) bridges daemon logs to container metrics' },
+      { pair: 'Logs ↔ Traces',    status: 'partial', note: 'service.name matches; daemon logs lack trace_id — only Docker SDK-instrumented calls carry trace context' },
+      { pair: 'Metrics ↔ Traces', status: 'full',    note: 'service.name=docker + container.name links docker_stats container metrics to Docker API operation spans' },
+    ]
+  }
+];
+
+function showOtelAddForm() {
+  const existingSubTypes = new Set(state.sources.filter(s => s.dataType === 'otelApp').map(s => s.subType));
+  const available = OTEL_APP_SUBTYPES.filter(o => !existingSubTypes.has(o.value));
+  if (available.length === 0) {
+    alert('All app types have already been added. Delete an existing app to add it again.');
+    return;
+  }
+  document.getElementById('modal-content').innerHTML = renderOtelAddForm(available[0].value, available);
+  openModal();
+  setupOtelFormListeners();
+}
+
+function renderOtelAddForm(subType, availableTypes) {
+  const types = availableTypes || OTEL_APP_SUBTYPES;
+  const info = types.find(o => o.value === subType) || types[0];
+
+  const pathRows = (info.signals || []).map((sig, idx) => {
+    const pathText = escHtml(sig.filePath || sig.displayPath || '');
+    const note = (!sig.filePath && !sig.displayPath) ? ' <span class="otel-info-note">(always live — metricsServer)</span>' : '';
+    return `<div class="otel-path-row" id="otel-path-sig-${idx}">
+      <span class="badge badge-${sig.dataType}">${sig.dataType}</span>
+      ${sig.label ? `<span class="otel-path-label">${escHtml(sig.label)}</span>` : ''}
+      <code class="otel-path-value">${pathText}</code>${note}
+    </div>`;
+  }).join('');
+
+  return `
+    <h2>Add OTel App</h2>
+    <form id="otel-source-form">
+      <div class="form-row">
+        <div class="form-group">
+          <label>App Type</label>
+          <select name="subType" id="otel-subType">
+            ${types.map(o =>
+              `<option value="${o.value}" ${o.value === subType ? 'selected' : ''}>${o.label}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" value="${escHtml(info.label)}" placeholder="My App" required>
+        </div>
+      </div>
+
+      <div class="otel-section">
+        <div class="otel-section-header">
+          <span class="otel-section-title">Output paths</span>
+          <span class="otel-section-desc">Logs and traces written to file. Metrics exposed as Prometheus scrape endpoint.</span>
+        </div>
+        <div class="otel-path-rows" id="otel-path-rows">
+          ${pathRows}
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Interval (seconds)</label>
+          <input type="number" name="intervalSeconds" value="10" min="1" max="3600">
+        </div>
+        <div class="form-group">
+          <label>Volume (records / tick)</label>
+          <input type="number" name="volumePerInterval" value="50" min="1" max="10000">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="otel-form-submit">Add App</button>
+      </div>
+    </form>`;
+}
+
+function setupOtelFormListeners() {
+  const subTypeSelect = document.getElementById('otel-subType');
+
+  subTypeSelect?.addEventListener('change', () => {
+    const info = OTEL_APP_SUBTYPES.find(o => o.value === subTypeSelect.value) || OTEL_APP_SUBTYPES[0];
+    const nameInput = document.querySelector('#otel-source-form [name="name"]');
+    if (nameInput && !nameInput.dataset.userEdited) nameInput.value = info.label;
+    const pathRowsEl = document.getElementById('otel-path-rows');
+    if (pathRowsEl) {
+      pathRowsEl.innerHTML = (info.signals || []).map((sig, idx) => {
+        const pathText = escHtml(sig.filePath || sig.displayPath || '');
+        const note = (!sig.filePath && !sig.displayPath) ? ' <span class="otel-info-note">(always live — metricsServer)</span>' : '';
+        return `<div class="otel-path-row" id="otel-path-sig-${idx}">
+          <span class="badge badge-${sig.dataType}">${sig.dataType}</span>
+          ${sig.label ? `<span class="otel-path-label">${escHtml(sig.label)}</span>` : ''}
+          <code class="otel-path-value">${pathText}</code>${note}
+        </div>`;
+      }).join('');
+    }
+  });
+
+  document.querySelector('#otel-source-form [name="name"]')?.addEventListener('input', function() {
+    this.dataset.userEdited = '1';
+  });
+
+  document.getElementById('otel-source-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const name = form.elements['name'].value.trim();
+    const subType = form.elements['subType'].value;
+    const info = OTEL_APP_SUBTYPES.find(o => o.value === subType) || OTEL_APP_SUBTYPES[0];
+    const intervalSeconds = parseInt(form.elements['intervalSeconds'].value) || 10;
+    const volumePerInterval = parseInt(form.elements['volumePerInterval'].value) || 50;
+
+    // One source for the whole app — worker handles multi-signal output internally
+    const source = {
+      name,
+      dataType: 'otelApp',
+      subType,
+      format: 'multi',
+      enabled: false,
+      httpEnabled: false,
+      fileEnabled: false,
+      endpointUrls: [],
+      fileOutputs: [],
+      filePath: '',
+      intervalSeconds,
+      volumePerInterval,
+      metadata: {},
+      headers: []
+    };
+
+    const btn = document.getElementById('otel-form-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+    try {
+      await fetch(`${API}/sources`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(source)
+      });
+      closeModal();
+      await fetchSources();
+    } catch (err) {
+      alert('Failed to create source: ' + err.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Add App'; }
+    }
+  });
+}
+
+// ── OTel grouped grid ─────────────────────────────────────────────────────────
+
+function renderOtelGrid(sources) {
+  const grid = document.getElementById('sources-grid-otel');
+  if (!grid) return;
+
+  if (sources.length === 0) {
+    grid.innerHTML = `<div style="text-align:center;padding:60px 0;color:var(--text-muted)">
+      <p style="font-size:18px;margin-bottom:8px">No OTel sources configured</p>
+      <p>Click <strong>+ Add App</strong> to simulate a Nginx, MySQL, Kafka, or Docker app writing telemetry to standard locations.</p>
+    </div>`;
+    return;
+  }
+
+  // Group by subType
+  const groups = {};
+  for (const s of sources) {
+    (groups[s.subType] = groups[s.subType] || []).push(s);
+  }
+
+  const ALL_SIGNALS = ['logs', 'metrics', 'traces'];
+  let html = '';
+
+  for (const [subType, groupSources] of Object.entries(groups)) {
+    // otelApp sources cover all signals — show them regardless of filter
+    const filtered = groupSources;
+    if (filtered.length === 0) continue;
+
+    const info = OTEL_APP_SUBTYPES.find(o => o.value === subType);
+    // All three signals are present for otelApp: logs+traces via worker, metrics via metricsServer.js
+    const pills = ALL_SIGNALS.map(sig =>
+      `<span class="otel-sig-pill otel-sig-pill-active">${sig}</span>`
+    ).join('');
+
+    html += `<div class="otel-source-group">
+      <div class="otel-group-header">
+        <span class="otel-group-name">${escHtml(info?.label || subType)}</span>
+        <span class="otel-group-signals">${pills}</span>
+      </div>
+      <div class="otel-group-cards">${filtered.map(renderSourceCard).join('')}</div>
+    </div>`;
+  }
+
+  grid.innerHTML = html || `<div style="text-align:center;padding:40px 0;color:var(--text-muted)">No sources match the "${escHtml(state.filter)}" filter.</div>`;
+}
+
+
+// ── Tab-scoped start / stop helpers ──────────────────────────────────────────
+
+async function startAllForPage(page) {
+  const ids = state.sources.filter(s => getSourcePage(s) === page).map(s => s.id);
+  await fetch(`${API}/sources/start-all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  });
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
+}
+
+async function stopAllForPage(page) {
+  const ids = state.sources.filter(s => getSourcePage(s) === page).map(s => s.id);
+  await fetch(`${API}/sources/stop-all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  });
+  await Promise.all([fetchSources(), fetchConfigStatus()]);
+}
+
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
 document.addEventListener('click', (e) => {
@@ -1208,18 +2694,23 @@ document.addEventListener('click', (e) => {
   }
 });
 
-document.getElementById('btn-add-source').addEventListener('click', showAddForm);
+// Per-page add / start / stop (tab-scoped)
+document.getElementById('btn-add-source-observability')?.addEventListener('click', () => showAddForm('observability'));
+document.getElementById('btn-add-source-security')?.addEventListener('click', () => showAddForm('security'));
+document.getElementById('btn-add-source-otel')?.addEventListener('click', showOtelAddForm);
+
+document.getElementById('btn-start-all')?.addEventListener('click', () => startAllForPage('observability'));
+document.getElementById('btn-stop-all')?.addEventListener('click', () => stopAllForPage('observability'));
+document.getElementById('btn-start-all-security')?.addEventListener('click', () => startAllForPage('security'));
+document.getElementById('btn-stop-all-security')?.addEventListener('click', () => stopAllForPage('security'));
+document.getElementById('btn-start-all-otel')?.addEventListener('click', () => startAllForPage('otel'));
+document.getElementById('btn-stop-all-otel')?.addEventListener('click', () => stopAllForPage('otel'));
+
+// Observability-only buttons
 document.getElementById('btn-test-send').addEventListener('click', showTestSend);
-document.getElementById('btn-versions').addEventListener('click', showVersionHistory);
+// Versions now in sidebar tab — no btn-versions
 document.getElementById('btn-reset-all-stats').addEventListener('click', resetAllStats);
-document.getElementById('btn-start-all').addEventListener('click', async () => {
-  await fetch(`${API}/sources/start-all`, { method: 'POST' });
-  await Promise.all([fetchSources(), fetchConfigStatus()]);
-});
-document.getElementById('btn-stop-all').addEventListener('click', async () => {
-  await fetch(`${API}/sources/stop-all`, { method: 'POST' });
-  await Promise.all([fetchSources(), fetchConfigStatus()]);
-});
+
 document.querySelector('.modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-overlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
@@ -1228,14 +2719,37 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
 });
 
+// Filter buttons — sync active state across all pages when clicked
 document.querySelectorAll('.btn-filter').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
     state.filter = btn.dataset.filter;
+    // Sync all filter buttons that match this filter value to active
+    document.querySelectorAll('.btn-filter').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === state.filter);
+    });
     render();
   });
 });
+
+// ── URL state persistence ─────────────────────────────────────────────────────
+
+const VALID_TABS    = new Set(['observability', 'security', 'otel', 'versions', 'settings']);
+const VALID_FILTERS = new Set(['all', 'logs', 'metrics', 'traces']);
+
+function pushUrlState() {
+  const params = new URLSearchParams();
+  params.set('tab', state.activeTab);
+  if (state.filter !== 'all') params.set('filter', state.filter);
+  history.replaceState(null, '', `${location.pathname}?${params}`);
+}
+
+function readUrlState() {
+  const params = new URLSearchParams(location.search);
+  const tab    = params.get('tab');
+  const filter = params.get('filter');
+  if (tab    && VALID_TABS.has(tab))       state.activeTab = tab;
+  if (filter && VALID_FILTERS.has(filter)) state.filter    = filter;
+}
 
 // Sidebar toggle
 document.getElementById('sidebar-toggle').addEventListener('click', () => {
@@ -1250,7 +2764,19 @@ document.querySelectorAll('.sidebar-nav-item').forEach(item => {
   });
 });
 
-// Initial load + polling
+// Filter buttons push URL state after updating filter
+document.querySelectorAll('.btn-filter').forEach(btn => {
+  btn.addEventListener('click', pushUrlState);
+});
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+readUrlState();
+switchTab(state.activeTab);
+document.querySelectorAll('.btn-filter').forEach(b => {
+  b.classList.toggle('active', b.dataset.filter === state.filter);
+});
+
 fetchSettings();
 fetchSources();
 fetchStats();

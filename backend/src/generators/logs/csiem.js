@@ -486,19 +486,75 @@ function dataExfiltration() {
 
 // --- Main generator ---
 
-export function generate(count, opts = {}) {
-  const records = [];
+function pickScenario() {
   const totalWeight = SCENARIO_WEIGHTS.reduce((s, g) => s + g.weight, 0);
+  let r = Math.random() * totalWeight;
+  for (const g of SCENARIO_WEIGHTS) {
+    r -= g.weight;
+    if (r <= 0) return g.fn();
+  }
+  return SCENARIO_WEIGHTS[0].fn();
+}
 
-  for (let i = 0; i < count; i++) {
-    let r = Math.random() * totalWeight;
-    let gen = SCENARIO_WEIGHTS[0].fn;
-    for (const g of SCENARIO_WEIGHTS) {
-      r -= g.weight;
-      if (r <= 0) { gen = g.fn; break; }
+export function generate(count, opts = {}) {
+  const dist = opts.severityDistribution;
+
+  if (!dist) {
+    const records = [];
+    for (let i = 0; i < count; i++) {
+      records.push(JSON.stringify(pickScenario()));
     }
-    records.push(JSON.stringify(gen()));
+    return records;
   }
 
-  return records;
+  // Build severity pools with 4x oversample, then sample to match distribution
+  const low = Math.max(0, dist.low ?? 0);
+  const medium = Math.max(0, dist.medium ?? 0);
+  const high = Math.max(0, dist.high ?? 0);
+  const critical = Math.max(0, dist.critical ?? 0);
+  const total = low + medium + high + critical;
+  if (total === 0) {
+    const records = [];
+    for (let i = 0; i < count; i++) records.push(JSON.stringify(pickScenario()));
+    return records;
+  }
+
+  const pools = { LOW: [], MEDIUM: [], HIGH: [], CRITICAL: [] };
+  const poolSize = Math.max(count * 4, 40);
+  for (let i = 0; i < poolSize; i++) {
+    const rec = pickScenario();
+    const sev = rec.severity || 'LOW';
+    if (pools[sev]) pools[sev].push(JSON.stringify(rec));
+  }
+
+  const targets = {
+    LOW: Math.round(count * low / total),
+    MEDIUM: Math.round(count * medium / total),
+    HIGH: Math.round(count * high / total),
+    CRITICAL: Math.round(count * critical / total)
+  };
+  // Fix rounding drift
+  const sum = targets.LOW + targets.MEDIUM + targets.HIGH + targets.CRITICAL;
+  if (sum < count) targets.HIGH += (count - sum);
+
+  const records = [];
+  for (const [sev, target] of Object.entries(targets)) {
+    const pool = pools[sev];
+    for (let i = 0; i < target; i++) {
+      if (pool.length > 0) {
+        records.push(pool[i % pool.length]);
+      } else {
+        // Fallback: generate a record of any severity
+        records.push(JSON.stringify(pickScenario()));
+      }
+    }
+  }
+
+  // Shuffle so severities are interleaved
+  for (let i = records.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [records[i], records[j]] = [records[j], records[i]];
+  }
+
+  return records.slice(0, count);
 }

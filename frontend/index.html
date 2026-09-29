@@ -25,11 +25,33 @@
         </button>
       </div>
       <nav class="sidebar-nav">
-        <a class="sidebar-nav-item active" data-tab="telemetry" role="button" tabindex="0">
+        <a class="sidebar-nav-item active" data-tab="observability" role="button" tabindex="0">
           <svg class="sidebar-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
-            <path d="M0 0h1v15h15v1H0V0zm10 3.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V4.9l-3.613 4.417a.5.5 0 0 1-.74.037L7.06 6.767l-3.656 5.027a.5.5 0 0 1-.808-.588l4-5.5a.5.5 0 0 1 .758-.06l2.609 2.61L13.445 4H10.5a.5.5 0 0 1-.5-.5z"/>
+            <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+            <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
           </svg>
-          <span class="sidebar-nav-label">Telemetry</span>
+          <span class="sidebar-nav-label">Observability</span>
+        </a>
+        <a class="sidebar-nav-item" data-tab="security" role="button" tabindex="0">
+          <svg class="sidebar-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M5.338 1.59a61.44 61.44 0 0 0-2.837.856.481.481 0 0 0-.328.39c-.554 4.157.726 7.19 2.253 9.188a10.725 10.725 0 0 0 2.287 2.233c.346.244.652.42.893.533.12.057.218.095.293.118a.55.55 0 0 0 .101.025.615.615 0 0 0 .1-.025c.076-.023.174-.061.294-.118.24-.113.547-.29.893-.533a10.726 10.726 0 0 0 2.287-2.233c1.527-1.997 2.807-5.031 2.253-9.188a.48.48 0 0 0-.328-.39c-.651-.213-1.75-.56-2.837-.855C9.552 1.29 8.531 1.067 8 1.067c-.53 0-1.552.223-2.662.524zM5.072.56C6.157.265 7.31 0 8 0s1.843.265 2.928.56c1.11.3 2.229.655 2.887.87a1.54 1.54 0 0 1 1.044 1.262c.596 4.477-.787 7.795-2.465 9.99a11.775 11.775 0 0 1-2.517 2.453 7.159 7.159 0 0 1-1.048.625c-.28.132-.581.24-.829.24s-.548-.108-.829-.24a7.158 7.158 0 0 1-1.048-.625 11.777 11.777 0 0 1-2.517-2.453C1.928 10.487.545 7.169 1.141 2.692A1.54 1.54 0 0 1 2.185 1.43 62.456 62.456 0 0 1 5.072.56z"/>
+            <path d="M10.854 5.146a.5.5 0 0 1 0 .708l-3 3a.5.5 0 0 1-.708 0l-1.5-1.5a.5.5 0 1 1 .708-.708L7.5 7.793l2.646-2.647a.5.5 0 0 1 .708 0z"/>
+          </svg>
+          <span class="sidebar-nav-label">Security</span>
+        </a>
+        <a class="sidebar-nav-item" data-tab="otel" role="button" tabindex="0">
+          <svg class="sidebar-nav-icon" viewBox="-12.70 -12.70 1024.40 1024.40" width="16" height="16">
+            <path fill="#f5a800" d="M528.7 545.9c-42 42-42 110.1 0 152.1s110.1 42 152.1 0 42-110.1 0-152.1-110.1-42-152.1 0zm113.7 113.8c-20.8 20.8-54.5 20.8-75.3 0-20.8-20.8-20.8-54.5 0-75.3 20.8-20.8 54.5-20.8 75.3 0 20.8 20.7 20.8 54.5 0 75.3zm36.6-643l-65.9 65.9c-12.9 12.9-12.9 34.1 0 47l257.3 257.3c12.9 12.9 34.1 12.9 47 0l65.9-65.9c12.9-12.9 12.9-34.1 0-47L725.9 16.7c-12.9-12.9-34-12.9-46.9 0zM217.3 858.8c11.7-11.7 11.7-30.8 0-42.5l-33.5-33.5c-11.7-11.7-30.8-11.7-42.5 0L72.1 852l-.1.1-19-19c-10.5-10.5-27.6-10.5-38 0-10.5 10.5-10.5 27.6 0 38l114 114c10.5 10.5 27.6 10.5 38 0s10.5-27.6 0-38l-19-19 .1-.1 69.2-69.2z"/>
+            <path fill="#425cc7" d="M565.9 205.9L419.5 352.3c-13 13-13 34.4 0 47.4l90.4 90.4c63.9-46 153.5-40.3 211 17.2l73.2-73.2c13-13 13-34.4 0-47.4L613.3 205.9c-13-13.1-34.4-13.1-47.4 0zm-94 322.3l-53.4-53.4c-12.5-12.5-33-12.5-45.5 0L184.7 663.2c-12.5 12.5-12.5 33 0 45.5l106.7 106.7c12.5 12.5 33 12.5 45.5 0L458 694.1c-25.6-52.9-21-116.8 13.9-165.9z"/>
+          </svg>
+          <span class="sidebar-nav-label">OTel Apps</span>
+        </a>
+        <a class="sidebar-nav-item" data-tab="versions" role="button" tabindex="0">
+          <svg class="sidebar-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5z"/>
+            <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/>
+          </svg>
+          <span class="sidebar-nav-label">Versions</span>
         </a>
         <a class="sidebar-nav-item" data-tab="settings" role="button" tabindex="0">
           <svg class="sidebar-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
@@ -40,9 +62,9 @@
         </a>
       </nav>
       <div class="sidebar-footer">
-        <a href="https://github.com/ritesh8467/TelemetryGenerator" target="_blank" class="github-link sidebar-github" title="View on GitHub">
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16">
-            <path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+        <a href="https://github.com/ritesh8467/TelemetryGenerator" target="_blank" class="sidebar-github" title="View on GitHub">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor">
+            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
           </svg>
           <span class="sidebar-nav-label">GitHub</span>
         </a>
@@ -50,58 +72,90 @@
     </aside>
 
     <div class="app-main">
-      <div id="tab-telemetry" class="app-tab">
-        <div id="config-status-bar" class="config-status-bar" style="display:none"></div>
-        <header>
-          <div class="header-inner">
-            <div class="header-left">
-              <div class="header-titles">
-                <h1 id="app-title">Telemetry Generator</h1>
-                <span class="subtitle">Sumo Logic HTTP Source Data Generator</span>
-              </div>
-            </div>
-            <div class="header-right">
-              <div id="aggregate-stats"></div>
-              <div id="draft-indicator" style="display:none"></div>
-            </div>
+
+      <div id="config-status-bar" class="config-status-bar" style="display:none"></div>
+
+      <!-- ─── Observability tab ──────────────────────────────────── -->
+      <div id="tab-observability" class="app-tab">
+        <div class="page-header">
+          <h1 class="page-title">Observability</h1>
+          <div class="page-actions">
+            <button id="btn-add-source-observability" class="btn btn-primary">+ Add Source</button>
+            <button id="btn-test-send" class="btn btn-secondary">Test Send</button>
+            <button id="btn-start-all" class="btn btn-success">Start All</button>
+            <button id="btn-stop-all" class="btn btn-danger">Stop All</button>
+            <button id="btn-reset-all-stats" class="btn btn-secondary">Reset All Stats</button>
           </div>
-        </header>
+          <div class="filter-group">
+            <button class="btn-filter active" data-filter="all">All</button>
+            <button class="btn-filter" data-filter="logs">Logs</button>
+            <button class="btn-filter" data-filter="metrics">Metrics</button>
+            <button class="btn-filter" data-filter="traces">Traces</button>
+          </div>
+        </div>
         <main>
-          <div class="toolbar">
-            <div class="toolbar-left">
-              <button id="btn-add-source" class="btn btn-primary">+ Add Source</button>
-              <button id="btn-test-send" class="btn btn-secondary">Test Send</button>
-              <button id="btn-start-all" class="btn btn-success">Start All</button>
-              <button id="btn-stop-all" class="btn btn-danger">Stop All</button>
-              <button id="btn-versions" class="btn btn-secondary">Versions</button>
-              <button id="btn-reset-all-stats" class="btn btn-secondary">Reset All Stats</button>
-            </div>
-            <div class="filter-group">
-              <button class="btn-filter active" data-filter="all">All</button>
-              <button class="btn-filter" data-filter="logs">Logs</button>
-              <button class="btn-filter" data-filter="metrics">Metrics</button>
-              <button class="btn-filter" data-filter="traces">Traces</button>
-            </div>
-          </div>
-          <div id="sources-grid" class="sources-grid"></div>
+          <div id="sources-grid-observability" class="sources-grid"></div>
         </main>
       </div>
 
-      <div id="tab-settings" class="app-tab hidden">
-        <header>
-          <div class="header-inner">
-            <div class="header-left">
-              <div class="header-titles">
-                <h1>Settings</h1>
-                <span class="subtitle">Application configuration</span>
-              </div>
-            </div>
+      <!-- ─── Security tab ───────────────────────────────────────── -->
+      <div id="tab-security" class="app-tab hidden">
+        <div class="page-header">
+          <h1 class="page-title">Security</h1>
+          <div class="page-actions">
+            <button id="btn-add-source-security" class="btn btn-primary">+ Add Source</button>
+            <button id="btn-start-all-security" class="btn btn-success">Start All</button>
+            <button id="btn-stop-all-security" class="btn btn-danger">Stop All</button>
           </div>
-        </header>
+          <div class="filter-group">
+            <button class="btn-filter active" data-filter="all">All</button>
+            <button class="btn-filter" data-filter="logs">Logs</button>
+            <button class="btn-filter" data-filter="metrics">Metrics</button>
+            <button class="btn-filter" data-filter="traces">Traces</button>
+          </div>
+        </div>
+        <main>
+          <div id="sources-grid-security" class="sources-grid"></div>
+        </main>
+      </div>
+
+      <!-- ─── OTel Sources tab ───────────────────────────────────── -->
+      <div id="tab-otel" class="app-tab hidden">
+        <div class="page-header">
+          <h1 class="page-title">OTel Apps</h1>
+          <div class="page-actions">
+            <button id="btn-add-source-otel" class="btn btn-primary">+ Add App</button>
+            <button id="btn-start-all-otel" class="btn btn-success">Start All</button>
+            <button id="btn-stop-all-otel" class="btn btn-danger">Stop All</button>
+          </div>
+        </div>
+        <main>
+          <div id="sources-grid-otel" class="sources-grid"></div>
+        </main>
+      </div>
+
+      <!-- ─── Versions tab ─────────────────────────────────────── -->
+      <div id="tab-versions" class="app-tab hidden">
+        <div class="page-header">
+          <h1 class="page-title">Versions</h1>
+        </div>
+        <main>
+          <div id="versions-tab-content" class="versions-tab-wrap">
+            <span style="color:var(--text-muted)">Loading...</span>
+          </div>
+        </main>
+      </div>
+
+      <!-- ─── Settings tab ──────────────────────────────────────── -->
+      <div id="tab-settings" class="app-tab hidden">
+        <div class="page-header">
+          <h1 class="page-title">Settings</h1>
+        </div>
         <main>
           <div id="settings-content"></div>
         </main>
       </div>
+
     </div>
   </div>
 

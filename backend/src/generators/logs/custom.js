@@ -1,13 +1,28 @@
 import { faker } from '@faker-js/faker';
 
+function buildLevelWeights(dist) {
+  if (!dist) return null;
+  const weights = [
+    { value: 'INFO', weight: Math.max(0, dist.info ?? 0) },
+    { value: 'WARN', weight: Math.max(0, dist.warn ?? 0) },
+    { value: 'ERROR', weight: Math.max(0, dist.error ?? 0) },
+    { value: 'DEBUG', weight: Math.max(0, dist.debug ?? 0) }
+  ].filter(w => w.weight > 0);
+  return weights.length > 0 ? weights : null;
+}
+
 export function generate(count, opts = {}) {
   const template = opts.template || '{timestamp} [{level}] {message}';
   const records = [];
+  const levelWeights = buildLevelWeights(opts.levelDistribution);
 
   for (let i = 0; i < count; i++) {
+    const level = levelWeights
+      ? faker.helpers.weightedArrayElement(levelWeights)
+      : faker.helpers.arrayElement(['INFO', 'WARN', 'ERROR', 'DEBUG']);
     let line = template
       .replace('{timestamp}', new Date().toISOString())
-      .replace('{level}', faker.helpers.arrayElement(['INFO', 'WARN', 'ERROR', 'DEBUG']))
+      .replace('{level}', level)
       .replace('{message}', faker.lorem.sentence())
       .replace('{ip}', faker.internet.ipv4())
       .replace('{host}', opts.sourceHost || faker.internet.domainName())

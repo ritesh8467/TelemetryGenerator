@@ -26,23 +26,45 @@ const MESSAGES = {
   postfix: ['connect from {hostname}[{ip}]', 'warning: hostname verification failed', 'NOQUEUE: reject: RCPT from {hostname}']
 };
 
-function pickSeverity() {
-  const total = SEVERITY_WEIGHTS.reduce((a, b) => a + b, 0);
+function pickSeverity(weights) {
+  const w = weights || SEVERITY_WEIGHTS;
+  const total = w.reduce((a, b) => a + b, 0);
   let r = Math.random() * total;
-  for (let i = 0; i < SEVERITY_WEIGHTS.length; i++) {
-    r -= SEVERITY_WEIGHTS[i];
+  for (let i = 0; i < w.length; i++) {
+    r -= w[i];
     if (r <= 0) return SEVERITIES[i];
   }
   return SEVERITIES[6];
 }
 
+function buildSeverityWeights(dist) {
+  if (!dist) return null;
+  // Syslog severities 0-7: emerg,alert,crit,err,warning,notice,info,debug
+  // Map: error -> split across emerg(0)+alert(1)+crit(2)+err(3), warn -> warning(4), info -> notice(5)+info(6), debug -> debug(7)
+  const e = Math.max(0, dist.error ?? 0);
+  const w = Math.max(0, dist.warn ?? 0);
+  const inf = Math.max(0, dist.info ?? 0);
+  const d = Math.max(0, dist.debug ?? 0);
+  return [
+    Math.round(e * 0.05),   // emerg
+    Math.round(e * 0.1),    // alert
+    Math.round(e * 0.2),    // crit
+    Math.round(e * 0.65),   // err
+    w,                       // warning
+    Math.round(inf * 0.4),  // notice
+    Math.round(inf * 0.6),  // info
+    d                        // debug
+  ];
+}
+
 export function generate(count, opts = {}) {
   const lines = [];
   const hostname = opts.sourceHost || `server-${faker.number.int({ min: 1, max: 20 })}.dc1.example.com`;
+  const customWeights = buildSeverityWeights(opts.levelDistribution);
 
   for (let i = 0; i < count; i++) {
     const facility = faker.helpers.arrayElement(FACILITIES);
-    const severity = pickSeverity();
+    const severity = pickSeverity(customWeights);
     const priority = facility.code * 8 + severity.code;
     const appName = faker.helpers.arrayElement(APP_NAMES);
     const pid = faker.number.int({ min: 100, max: 65535 });

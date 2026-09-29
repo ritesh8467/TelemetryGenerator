@@ -1,4 +1,4 @@
-export async function send(traceData, endpointUrl, format, metadata = {}) {
+export async function send(traceData, endpointUrl, format, metadata = {}, customHeaders = []) {
   // Generator returns an array of trace objects; flatten into a single OTLP ExportTraceServiceRequest.
   const otlpPayload = Array.isArray(traceData)
     ? { resourceSpans: traceData.flatMap(t => t.resourceSpans || []) }
@@ -12,6 +12,9 @@ export async function send(traceData, endpointUrl, format, metadata = {}) {
   if (metadata.sourceCategory) headers['X-Sumo-Category'] = metadata.sourceCategory;
   if (metadata.sourceHost) headers['X-Sumo-Host'] = metadata.sourceHost;
   if (metadata.sourceName) headers['X-Sumo-Name'] = metadata.sourceName;
+  for (const h of customHeaders) {
+    if (h.key) headers[h.key] = h.value || '';
+  }
 
   let url = endpointUrl;
   // Only append /v1/traces for generic OTLP collector endpoints.

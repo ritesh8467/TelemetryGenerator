@@ -13,6 +13,15 @@ const SCENARIOS = [
   'profile_sync'
 ];
 
+// Maps PII category → which scenarios it produces
+const PII_CATEGORY_SCENARIOS = {
+  financial: ['payment_processed', 'refund_request'],
+  identity: ['customer_signup', 'account_update', 'kyc_verification'],
+  contact: ['order_confirmation', 'support_ticket'],
+  credentials: ['login_event'],
+  comprehensive: ['data_export', 'profile_sync']
+};
+
 const LOG_TEMPLATES = {
   customer_signup(person) {
     return `New customer registration: name=${person.fullName}, email=${person.email}, phone=${person.phone}, dob=${person.dob}, ssn=${person.ssn}, address="${person.address}"`;
@@ -172,9 +181,16 @@ function generatePerson() {
 export function generate(count, opts = {}) {
   const records = [];
 
+  // Build allowed scenario list from piiTypes filter
+  let allowedScenarios = SCENARIOS;
+  if (Array.isArray(opts.piiTypes) && opts.piiTypes.length > 0) {
+    const scenarioSet = new Set(opts.piiTypes.flatMap(t => PII_CATEGORY_SCENARIOS[t] || []));
+    if (scenarioSet.size > 0) allowedScenarios = SCENARIOS.filter(s => scenarioSet.has(s));
+  }
+
   for (let i = 0; i < count; i++) {
     const person = generatePerson();
-    const scenario = faker.helpers.arrayElement(SCENARIOS);
+    const scenario = faker.helpers.arrayElement(allowedScenarios);
     const template = LOG_TEMPLATES[scenario];
     records.push(template(person));
   }
