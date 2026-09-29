@@ -125,7 +125,7 @@ function apiVersionsResponse(correlationId, requestedVersion) {
   // DescribeGroups v5, OffsetFetch v6, ListOffsets v6, FindCoordinator v3.
   const apis = [
     [18, 0, 3],  // ApiVersions      (flexible v3, handled via flexFrame)
-    [3,  0, 5],  // Metadata          (flexible v9 — v5 is safe)
+    [3,  0, 6],  // Metadata          (flexible v9 — v6 is safe; franz-go min is v6; v7 adds leader_epoch)
     [16, 0, 2],  // ListGroups        (flexible v3 — v2 is safe)
     [15, 0, 3],  // DescribeGroups    (flexible v5 — v3 is safe)
     [9,  0, 5],  // OffsetFetch       (flexible v6 — v5 is safe)
