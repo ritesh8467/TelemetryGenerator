@@ -1,28 +1,42 @@
 # Telemetry Generator
 
-A comprehensive telemetry data generator for testing and development. Generate realistic logs, metrics, and traces with support for multiple export modes.
+A full-stack Node.js application that generates realistic telemetry data (logs, metrics, traces) and sends it to multiple destinations simultaneously. Designed for testing observability pipelines, including an **OTel Apps** mode that mimics real production software (nginx, MySQL, Kafka, Docker) so an OpenTelemetry collector can connect to it exactly as it would to the real thing.
 
 ## Features
 
-- **Multiple Data Types:**
-  - **Logs:** Apache, Nginx, Syslog, Kubernetes Pod, AWS CloudTrail, PII, Microservice, CSIEM Security Events
-  - **Metrics:** Host, Application, Kubernetes, Custom
-  - **Traces:** HTTP Request, Database, Microservice Chain, Error Traces
+### Data Generation
 
-- **Dual Export Modes:**
-  - **HTTP Export:** Send to Sumo Logic HTTP endpoints with support for multiple simultaneous destinations
-  - **Local File Export:** Write to local filesystem with automatic log rotation (10MB max, 2 files, 1-day retention)
+- **Logs** — Apache Combined, Nginx access/error, Structured JSON, Syslog (RFC 5424), Kubernetes Pod, AWS CloudTrail, PII (for masking/DLP testing), Microservice, CSIEM Security Events, Custom template
+- **Metrics** — Host (CPU/memory/disk/network), Application (HTTP/cache/queue), Kubernetes pods/nodes, Custom
+- **Traces** — HTTP Request, Database queries, Microservice chain (parent/child spans), Error traces with exceptions, GenAI (LLM request spans with OpenTelemetry GenAI semantic conventions)
 
-- **Advanced Features:**
-  - Run HTTP and File exports simultaneously on the same source
-  - Per-endpoint enable/disable for HTTP destinations
-  - Real-time health indicators (green/red status for each export mode)
-  - Configurable interval and volume per source
-  - Start All / Stop All bulk operations (preserves per-endpoint enabled states)
-  - View recent telemetry samples
-  - Source duplication and deletion
-  - **Settings tab:** configure app name, timezone (applied to log timestamps), and version history limit
-  - **Collapsible left sidebar** for navigating between Telemetry and Settings views
+### Export Modes
+
+- **HTTP Export** — send to any HTTP endpoint (Sumo Logic, OTel collector, etc.) with support for multiple simultaneous destinations per source
+- **Local File Export** — write to local filesystem with automatic rotation (10 MB max, 2 files, 1-day retention)
+- Both modes can run simultaneously on the same source; each can be independently toggled
+
+### OTel Apps — Native Protocol Servers
+
+OTel Apps mimic real production applications at the protocol level. An OTel collector pointed at this app receives data indistinguishable from the real software:
+
+| App | Protocol | Port | OTel Receiver |
+|-----|----------|------|---------------|
+| **nginx** | HTTP stub_status | 9113 | `nginx/` |
+| **MySQL** | MySQL wire protocol (4.1+) | 3306 | `mysql` |
+| **Kafka** | Kafka wire protocol | 9092 | `kafkametrics` |
+| **Docker** | Docker HTTP API | 2375 | `docker_stats` |
+
+Each OTel App also generates realistic logs and OTLP traces written to `/tmp/otel/`.
+
+### App Management
+
+- **Version history** — every save creates a snapshot; snapshots can be pinned to prevent auto-deletion; any version can be restored or previewed with a field-level diff
+- **Global override** — Settings tab can override interval and volume across all sources at once
+- **Collapsible sidebar** — navigate between Telemetry and OTel Apps tabs
+- **Timezone-aware timestamps** — all log generators accept an IANA timezone string
+- **Real-time health indicators** — per-endpoint green/red status updated after every tick
+- **Bulk operations** — Start All / Stop All without affecting per-source enabled state
 
 ## Prerequisites
 
@@ -32,84 +46,101 @@ A comprehensive telemetry data generator for testing and development. Generate r
 ## Installation
 
 ```bash
+git clone https://github.com/ritesh8467/TelemetryGenerator.git
 cd TelemetryGenerator
 npm install
 ```
 
-> A single `npm install` installs both root and backend dependencies automatically.
+A single `npm install` installs both root and backend dependencies automatically.
 
 ## Usage
 
-### Start Development Server (with auto-reload)
-
 ```bash
+# Development (auto-reload on file changes)
 npm run dev
-```
 
-### Start Production Server
-
-```bash
+# Production
 npm start
 ```
 
-The application will be available at `http://localhost:3000`
+The UI is available at `http://localhost:3000`.
 
-### Accessing the UI
+## Quick Start
 
-1. Open browser to `http://localhost:3000`
-2. Create a new source by clicking "+ Add Source"
-3. Configure:
-   - **Name:** Descriptive name for the source
-   - **Data Type:** Logs, Metrics, or Traces
-   - **Sub Type:** Specific generator variant
-   - **Format:** Output format (text, JSON, etc.)
-   - **HTTP Tab:** Configure HTTP endpoints (optional)
-   - **File Tab:** Configure local file path (optional)
-   - **Interval:** How often to generate data (seconds)
-   - **Volume:** Records per generation
-4. Enable HTTP and/or File export via toggles on the source tile
-5. Click the export toggles to start/stop individual modes
+1. Open `http://localhost:3000`
+2. Click **+ Add Source** in the Telemetry tab
+3. Choose Data Type, Sub Type, Format, interval, and volume
+4. Add an HTTP endpoint or file path (or both)
+5. Toggle the source on — the health dot turns green on first successful send
 
-## Configuration
+For OTel Apps, click the **OTel Apps** tab in the sidebar, enable an app, then point your OTel collector at the corresponding port.
 
-### HTTP Export
+## OTel Collector Config Examples
 
-- Add one or more HTTP endpoints
-- Each endpoint can be independently enabled/disabled
-- Supports Sumo Logic HTTP Source format
-- Source Category and Source Host metadata (HTTP-only)
+### nginx metrics
+```yaml
+receivers:
+  nginx:
+    endpoint: http://localhost:9113/nginx_status
+    collection_interval: 1m
+```
 
-### Local File Export
+### MySQL metrics
+```yaml
+receivers:
+  mysql:
+    endpoint: localhost:3306
+    username: otel_monitor
+    password: any_value_accepted
+    collection_interval: 60s
+```
 
-- Specify a writable file path (e.g., `/tmp/telemetry.log` or `~/logs/telemetry.log`)
-- Automatic rotation when file reaches 10MB
-- Maximum 2 files kept (active + 1 backup)
-- Files older than 1 day are automatically cleaned up
+### Kafka metrics
+```yaml
+receivers:
+  kafkametrics:
+    brokers: [localhost:9092]
+    protocol_version: 2.0.0
+    scrapers: [brokers, topics, consumers]
+    collection_interval: 1m
+```
 
-## API Endpoints
+### Docker metrics
+```yaml
+receivers:
+  docker_stats:
+    endpoint: http://localhost:2375
+    collection_interval: 1m
+```
 
-### Sources
+### nginx logs
+```yaml
+receivers:
+  filelog/nginx_access:
+    include: [/tmp/otel/nginx/access.log]
+    start_at: end
+  filelog/nginx_error:
+    include: [/tmp/otel/nginx/error.log]
+    start_at: end
+    multiline:
+      line_start_pattern: '^\d{4}/\d{2}/\d{2} '
+```
 
-- `GET /api/sources` - List all sources
-- `POST /api/sources` - Create source
-- `PUT /api/sources/:id` - Update source
-- `DELETE /api/sources/:id` - Delete source
-- `POST /api/sources/:id/toggle` - Toggle source on/off
-- `POST /api/sources/:id/toggle-http` - Toggle HTTP export
-- `POST /api/sources/:id/toggle-file` - Toggle File export
-- `POST /api/sources/:id/duplicate` - Duplicate source
-- `GET /api/sources/:id/recent` - Get recent telemetry samples
-- `POST /api/sources/start-all` - Start all sources
-- `POST /api/sources/stop-all` - Stop all sources
-
-### Settings
-
-- `GET /api/settings` - Get app settings (appName, timezone, maxVersions)
-- `PUT /api/settings` - Update settings (partial update supported)
-
-### Statistics
-
-- `GET /api/stats` - Get aggregate statistics
+### MySQL logs
+```yaml
+receivers:
+  filelog/mysql_error:
+    include: [/tmp/otel/mysql/error.log]
+    start_at: end
+    operators:
+      - type: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T[\d:.]+Z) (?P<thread>\d+) \[(?P<level>[^\]]+)\] (?P<message>.*)'
+  filelog/mysql_slow:
+    include: [/tmp/otel/mysql/slow.log]
+    start_at: end
+    multiline:
+      line_start_pattern: '^# Time:'
+```
 
 ## Project Structure
 
@@ -117,59 +148,85 @@ The application will be available at `http://localhost:3000`
 TelemetryGenerator/
 ├── backend/
 │   ├── package.json
-│   ├── src/
-│   │   ├── server.js              # Express server entry point
-│   │   ├── config.js              # Config persistence (draft/publish/versions)
-│   │   ├── settings.js            # App settings persistence (appName, timezone, maxVersions)
-│   │   ├── sourceManager.js       # Worker lifecycle management
-│   │   ├── routes/
-│   │   │   ├── sources.js         # Source CRUD routes
-│   │   │   ├── settings.js        # GET/PUT /api/settings
-│   │   │   └── stats.js           # Statistics routes
-│   │   ├── workers/
-│   │   │   └── sourceWorker.js    # Tick loop for data generation
-│   │   ├── generators/
-│   │   │   ├── logs/              # Log generators (timezone-aware)
-│   │   │   ├── metrics/           # Metric generators
-│   │   │   └── traces/            # Trace generators
-│   │   ├── utils/
-│   │   │   └── time.js            # Timezone-aware timestamp formatters
-│   │   └── senders/
-│   │       ├── logSender.js       # HTTP log sender
-│   │       ├── metricSender.js    # HTTP metric sender
-│   │       ├── traceSender.js     # HTTP trace sender
-│   │       └── fileSender.js      # File sender with rotation
-│   └── data/
-│       ├── config.json            # Persisted source configs
-│       └── settings.json          # Persisted app settings
+│   └── src/
+│       ├── server.js              # Express entry point; starts all protocol servers
+│       ├── config.js              # Immediate-save config with version snapshots
+│       ├── settings.js            # App settings (appName, timezone, maxVersions, override)
+│       ├── sourceManager.js       # Worker lifecycle management
+│       ├── metricsServer.js       # nginx stub_status (9113) + Docker HTTP API (2375)
+│       ├── mysqlServer.js         # MySQL wire-protocol server (3306)
+│       ├── kafkaServer.js         # Kafka wire-protocol server (9092)
+│       ├── routes/
+│       │   ├── sources.js         # Source CRUD + toggle routes
+│       │   ├── config.js          # Version history routes
+│       │   └── settings.js        # GET/PUT /api/settings
+│       ├── workers/
+│       │   └── sourceWorker.js    # Tick loop; writes OTel App log/trace files
+│       ├── generators/
+│       │   ├── logs/              # apache, nginx, nginxOtel, appJson, syslog, k8sPod,
+│       │   │                      #   cloudtrail, microservice, pii, csiem, mysqlOtel,
+│       │   │                      #   kafkaOtel, dockerOtel, custom
+│       │   ├── metrics/           # host, application, kubernetes, nginxOtel, mysqlOtel,
+│       │   │                      #   kafkaOtel, dockerOtel, custom
+│       │   └── traces/            # httpRequest, database, microservice, error, genai,
+│       │                          #   nginxOtel, mysqlOtel, kafkaOtel, dockerOtel
+│       ├── senders/
+│       │   ├── logSender.js       # text / json (NDJSON) / syslog
+│       │   ├── metricSender.js    # carbon2 / prometheus / graphite / otlp
+│       │   ├── traceSender.js     # otlp (flattens to single ResourceSpans payload)
+│       │   └── fileSender.js      # file writer with rotation
+│       └── utils/
+│           └── time.js            # formatISOInZone, formatApacheTimestamp
 ├── frontend/
-│   ├── index.html                 # App shell with collapsible sidebar + two-tab layout
-│   ├── app.js                     # SPA logic
-│   └── styles.css                 # Dark theme styles
-└── package.json
+│   ├── index.html                 # App shell (collapsible sidebar, two-tab layout)
+│   ├── app.js                     # SPA — polling, modals, version diff, OTel App UI
+│   └── styles.css                 # Dark theme, CSS variables, BEM-like naming
+└── package.json                   # Root: installs backend deps via postinstall
 ```
 
-## Health Indicators
+## API Reference
 
-- **🟢 Green dot:** Export mode working (successful send)
-- **🔴 Red dot:** Export mode failed (errors detected)
-- Green indicator appears only when the mode is enabled
+### Sources
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/sources` | List all sources with live health/stats |
+| `POST` | `/api/sources` | Create source (saves + snapshots immediately) |
+| `PUT` | `/api/sources/:id` | Update source (saves + restarts worker) |
+| `DELETE` | `/api/sources/:id` | Delete source |
+| `POST` | `/api/sources/:id/toggle` | Start / stop a source |
+| `POST` | `/api/sources/:id/toggle-endpoint/:index` | Enable / disable one HTTP endpoint |
+| `POST` | `/api/sources/:id/toggle-file-output/:index` | Enable / disable one file output |
+| `POST` | `/api/sources/start-all` | Start all workers (no config change) |
+| `POST` | `/api/sources/stop-all` | Stop all workers (no config change) |
+| `POST` | `/api/sources/reset-all-stats` | Zero all stats counters |
 
-## Source Activity Status
+### Config / Versions
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/config/status` | `{publishedCount, currentVersion}` |
+| `GET` | `/api/config/versions` | List snapshots with pinned flag |
+| `GET` | `/api/config/versions/:n` | Full version with sources |
+| `POST` | `/api/config/versions/:n/restore` | Restore version (current saved first) |
+| `POST` | `/api/config/versions/:n/pin` | Toggle pinned (pinned versions never auto-deleted) |
 
-- **Running:** At least one export mode (HTTP or File) is enabled
-- **Stopped:** No export modes are enabled
+### Settings
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/settings` | Get `{appName, timezone, maxVersions, overrideEnabled, globalIntervalSeconds, globalVolumePerInterval}` |
+| `PUT` | `/api/settings` | Partial update; restarts workers if override/interval changes |
 
-## Error Handling
+## Supported Formats
 
-- **HTTP Errors:** Displayed on health indicators, detailed in recent logs view
-- **File Errors:** Permission denied errors suggest using `/tmp/` or home directory
-- **Validation:** Source must have at least HTTP or File export enabled to run
+| Data Type | Formats |
+|-----------|---------|
+| Logs | `text`, `json` (NDJSON), `syslog` |
+| Metrics | `carbon2`, `prometheus`, `graphite`, `otlp` |
+| Traces | `otlp` |
+
+## Security
+
+Dependencies are kept up-to-date and audited. Run `npm audit` in the `backend/` directory to check the current status. The project targets zero high/critical vulnerabilities.
 
 ## License
 
 MIT
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
